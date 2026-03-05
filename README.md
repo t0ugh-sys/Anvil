@@ -1,5 +1,7 @@
 # LoopAgent
 
+> Requires **Python 3.11+**
+
 这是一个可扩展的“循环执行 Agent”项目骨架：核心库只使用 Python 标准库，支持持续迭代执行，直到满足 `done=True` 或命中停止条件（超时/最大步数/外部取消）。
 
 ## Python 版本要求（必读）
@@ -58,20 +60,19 @@ CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.githu
 - `tests/`：单元测试（`unittest`）
 - `examples/`：可选示例（可能需要额外依赖）
 
-## 可选：Conda 方式
+## 快速开始（安装与运行测试）
 
 在项目根目录执行：
 
-```powershell
-$env:PYTHONPATH="src"
-conda --no-plugins run --no-capture-output -n base python -m unittest discover -s tests -p "test_*.py" -v
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 ## 快速开始（运行 CLI）
 
 ```powershell
-$env:PYTHONPATH="src"
-conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy demo
+python -m loop_agent.cli --goal-file .\goal.txt --strategy demo
 ```
 
 内置策略：
@@ -83,8 +84,7 @@ conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --go
 例如切换到 `json_stub`：
 
 ```powershell
-$env:PYTHONPATH="src"
-conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
+python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
 ```
 
 切换模型（参数化切换）：
@@ -143,8 +143,7 @@ python -m loop_agent.agent_cli code --goal "fix failing test" --workspace . --pr
 机器可读输出（便于 CI 或平台接入）：
 
 ```powershell
-$env:PYTHONPATH="src"
-conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --output json --include-history
+python -m loop_agent.cli --goal-file .\goal.txt --output json --include-history
 ```
 
 事件落盘（JSONL）：
@@ -198,8 +197,7 @@ CLI 参数：
 ## 运行示例（JSON 协议 + stub 模型）
 
 ```powershell
-$env:PYTHONPATH="src"
-conda --no-plugins run --no-capture-output -n base python .\examples\json_loop_stub_demo.py
+python .\examples\json_loop_stub_demo.py
 ```
 
 ## 推荐用法（安装为包）
@@ -207,7 +205,7 @@ conda --no-plugins run --no-capture-output -n base python .\examples\json_loop_s
 开源场景默认推荐上面的 `pip install -e .` 路径；下面是 Conda 环境里的等价写法：
 
 ```powershell
-conda --no-plugins run -n base python -m pip install -e .
-conda --no-plugins run --no-capture-output -n base python -m unittest discover -s tests -p "test_*.py" -v
-conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt
+python -m pip install -e .
+python -m unittest discover -s tests -p "test_*.py" -v
+python -m loop_agent.cli --goal-file .\goal.txt
 ```
