@@ -56,12 +56,26 @@ conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --go
 
 - `demo`：固定三轮收敛
 - `json_stub`：按 JSON 协议迭代，模拟 LLM 输出
+- `json_llm`：调用可配置模型（provider/model 可切换）
 
 例如切换到 `json_stub`：
 
 ```powershell
 $env:PYTHONPATH="src"
 conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
+```
+
+切换模型（OpenClaw-style 参数化切换）：
+
+```bash
+python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider mock --model qwen-max
+```
+
+OpenAI-compatible provider 示例：
+
+```bash
+set OPENAI_API_KEY=sk-xxx
+python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1
 ```
 
 机器可读输出（便于 CI 或平台接入）：

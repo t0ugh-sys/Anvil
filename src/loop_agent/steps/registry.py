@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..core.types import StepFn
+from ..llm.providers import build_invoke_from_args
 from .demo import DemoState, demo_step
 from .json_loop import JsonLoopState, make_json_decision_step
 
@@ -54,9 +55,16 @@ def _build_json_stub_step(args: argparse.Namespace) -> StepBundle:
     return step, JsonLoopState()
 
 
+def _build_json_llm_step(args: argparse.Namespace) -> StepBundle:
+    invoke = build_invoke_from_args(args)
+    history_window = int(getattr(args, 'history_window', 3))
+    step = make_json_decision_step(invoke, history_window=history_window)
+    return step, JsonLoopState()
+
+
 def build_default_registry() -> StepRegistry:
     registry = StepRegistry(_builders={})
     registry.register('demo', _build_demo_step)
+    registry.register('json_llm', _build_json_llm_step)
     registry.register('json_stub', _build_json_stub_step)
     return registry
-

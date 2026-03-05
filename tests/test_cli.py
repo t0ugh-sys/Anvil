@@ -21,6 +21,24 @@ class CliTests(unittest.TestCase):
         args = parser.parse_args(['--goal', 'x', '--strategy', 'json_stub'])
         self.assertEqual(args.strategy, 'json_stub')
 
+    def test_should_parse_provider_and_model(self) -> None:
+        parser = build_parser(build_default_registry())
+        args = parser.parse_args(
+            [
+                '--goal',
+                'x',
+                '--strategy',
+                'json_llm',
+                '--provider',
+                'mock',
+                '--model',
+                'qwen-max',
+            ]
+        )
+        self.assertEqual(args.strategy, 'json_llm')
+        self.assertEqual(args.provider, 'mock')
+        self.assertEqual(args.model, 'qwen-max')
+
     def test_should_read_goal_from_utf8_file(self) -> None:
         parser = build_parser(build_default_registry())
         with tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8', suffix='.txt') as file:
@@ -120,6 +138,38 @@ class CliTests(unittest.TestCase):
         try:
             _, exit_code = execute(args, build_default_registry())
             self.assertEqual(exit_code, 0)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_execute_json_llm_strategy_with_mock_provider(self) -> None:
+        parser = build_parser(build_default_registry())
+        tmp_dir = Path('tests/.tmp') / f'run-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        memory_dir = tmp_dir / 'memory'
+        try:
+            args = parser.parse_args(
+                [
+                    '--goal',
+                    'x',
+                    '--strategy',
+                    'json_llm',
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v2',
+                    '--max-steps',
+                    '5',
+                    '--output',
+                    'json',
+                    '--memory-dir',
+                    str(memory_dir),
+                ]
+            )
+            rendered, exit_code = execute(args, build_default_registry())
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(rendered)
+            self.assertEqual(payload['stop_reason'], 'done')
+            self.assertEqual(payload['done'], True)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
