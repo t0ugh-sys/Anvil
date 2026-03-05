@@ -9,6 +9,13 @@ from .core.agent import LoopAgent
 from .core.types import ContextProviderFn, ObserverFn, RunResult, StepContext, StepResult, StopConfig
 from .tools import ToolContext, build_default_tools, execute_tool_call
 
+# Try to import skills module
+try:
+    from .skills import SkillLoader, build_skill_tools, load_skills_from_args
+    HAS_SKILLS = True
+except ImportError:
+    HAS_SKILLS = False
+
 DeciderFn = Callable[[str, tuple[str, ...], tuple[ToolResult, ...], dict[str, object], tuple[str, ...]], str]
 
 
@@ -18,8 +25,19 @@ class CodingAgentState:
     tool_results: tuple[ToolResult, ...] = tuple()
 
 
-def build_coding_step(decider: DeciderFn, workspace_root: Path) -> Callable[[StepContext[CodingAgentState]], StepResult[CodingAgentState]]:
+def build_coding_step(
+    decider: DeciderFn,
+    workspace_root: Path,
+    skills: SkillLoader | None = None,
+) -> Callable[[StepContext[CodingAgentState]], StepResult[CodingAgentState]]:
+    # Start with default tools
     tools = build_default_tools()
+    
+    # Merge with skill tools if available
+    if skills is not None:
+        skill_tools = skills.get_tools()
+        tools.update(skill_tools)
+    
     tool_context = ToolContext(workspace_root=workspace_root)
 
     def step(context: StepContext[CodingAgentState]) -> StepResult[CodingAgentState]:
@@ -84,8 +102,9 @@ def run_coding_agent(
     stop: StopConfig | None = None,
     observer: ObserverFn | None = None,
     context_provider: ContextProviderFn | None = None,
+    skills: SkillLoader | None = None,
 ) -> RunResult[CodingAgentState]:
-    step = build_coding_step(decider, workspace_root=workspace_root)
+    step = build_coding_step(decider, workspace_root=workspace_root, skills=skills)
     agent = LoopAgent(step=step, stop=stop or StopConfig(max_steps=20, max_elapsed_s=60.0))
     return agent.run(
         goal=goal,
