@@ -5,11 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+SCHEMA_VERSION = "run-schema-v1"  # keep in sync with loop_agent.run_schema.SCHEMA_VERSION
 from .base import MemoryContext
 
 
 def _default_summary() -> dict[str, Any]:
     return {
+        'schema_version': SCHEMA_VERSION,
         'goal': '',
         'current_plan': [],
         'facts': [],
@@ -36,7 +38,15 @@ class JsonlMemoryStore:
         self._state_file = self.memory_dir / 'state.json'
         self._summary_file = self.memory_dir / 'summary.json'
         if not self._state_file.exists():
-            self._write_state({'goal': '', 'step_index': 0, 'last_output': '', 'history_tail': []})
+            self._write_state(
+                {
+                    'schema_version': SCHEMA_VERSION,
+                    'goal': '',
+                    'step_index': 0,
+                    'last_output': '',
+                    'history_tail': [],
+                }
+            )
         if not self._summary_file.exists():
             self._write_summary(_default_summary())
 
@@ -70,12 +80,22 @@ class JsonlMemoryStore:
             return sum(1 for _ in file)
 
     def _read_state(self) -> dict[str, Any]:
+        default_state: dict[str, Any] = {
+            'schema_version': SCHEMA_VERSION,
+            'goal': '',
+            'step_index': 0,
+            'last_output': '',
+            'history_tail': [],
+        }
         if not self._state_file.exists():
-            return {'goal': '', 'step_index': 0, 'last_output': '', 'history_tail': []}
+            return default_state
         try:
-            return json.loads(self._state_file.read_text(encoding='utf-8'))
+            state = json.loads(self._state_file.read_text(encoding='utf-8'))
+            if isinstance(state, dict) and 'schema_version' not in state:
+                state['schema_version'] = SCHEMA_VERSION
+            return state if isinstance(state, dict) else default_state
         except json.JSONDecodeError:
-            return {'goal': '', 'step_index': 0, 'last_output': '', 'history_tail': []}
+            return default_state
 
     def _write_state(self, state: dict[str, Any]) -> None:
         self._state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -84,7 +104,10 @@ class JsonlMemoryStore:
         if not self._summary_file.exists():
             return _default_summary()
         try:
-            return json.loads(self._summary_file.read_text(encoding='utf-8'))
+            state = json.loads(self._summary_file.read_text(encoding='utf-8'))
+            if isinstance(state, dict) and 'schema_version' not in state:
+                state['schema_version'] = SCHEMA_VERSION
+            return state if isinstance(state, dict) else _default_summary()
         except json.JSONDecodeError:
             return _default_summary()
 
