@@ -13,6 +13,68 @@ InvokeFn = Callable[[str], str]
 DEFAULT_RETRY_HTTP_CODES = {502, 503, 504, 524}
 
 
+def _anthropic_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float,
+    timeout_s: float,
+    max_retries: int,
+    retry_backoff_s: float,
+    retry_http_codes: set[int],
+) -> InvokeFn:
+    endpoint = 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+    }
+
+    def _request_once(prompt: str) -> dict:
+        payload = {
+            'model': model,
+            'max_tokens': 1024,
+            'temperature': temperature,
+            'messages': [{'role': 'user', 'content': prompt}],
+        }
+        body = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                raw = response.read().decode('utf-8')
+                return json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+    def invoke(prompt: str) -> str:
+        last_http_error: ProviderHttpError | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                response = _request_once(prompt)
+                return response['content'][0]['text']
+            except ProviderHttpError as exc:
+                last_http_error = exc
+                if exc.status_code in retry_http_codes and attempt < max_retries:
+                    time.sleep(retry_backoff_s * (2 ** attempt))
+                    continue
+                break
+
+        if last_http_error is not None:
+            error_msg = f'Anthropic API error: HTTP {last_http_error.status_code}'
+            if last_http_error.body:
+                error_msg += f' - {last_http_error.body[:200]}'
+            raise ValueError(error_msg)
+        raise ValueError('Anthropic API request failed - no response received')
+
+    return invoke
+
+
 class ProviderHttpError(Exception):
     def __init__(self, status_code: int, body: str) -> None:
         super().__init__(f'HTTP {status_code}: {body}')
@@ -105,6 +167,7 @@ def _openai_compatible_invoke_factory(
         last_http_error: ProviderHttpError | None = None
 
         for current_model in models_to_try:
+            data = None
             for attempt in range(max_retries + 1):
                 try:
                     data = _request_once(prompt, current_model)
@@ -115,7 +178,6 @@ def _openai_compatible_invoke_factory(
                     if should_retry:
                         time.sleep(retry_backoff_s * (2 ** attempt))
                         continue
-                    data = None
                     break
             if data is None:
                 continue
@@ -212,6 +274,27 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
             retry_http_codes=retry_http_codes,
         )
 
+    if provider == 'anthropic':
+        api_key_env = str(getattr(args, 'api_key_env', 'ANTHROPIC_API_KEY'))
+        api_key = os.getenv(api_key_env, '').strip()
+        if not api_key:
+            raise ValueError(f'api key is missing: env {api_key_env}')
+        temperature = float(getattr(args, 'temperature', 0.2))
+        timeout_s = float(getattr(args, 'provider_timeout_s', 60.0))
+        max_retries = int(getattr(args, 'max_retries', 2))
+        retry_backoff_s = float(getattr(args, 'retry_backoff_s', 1.0))
+        retry_http_codes = set(int(item) for item in getattr(args, 'retry_http_code', []))
+        if not retry_http_codes:
+            retry_http_codes = set(DEFAULT_RETRY_HTTP_CODES)
+        return _anthropic_invoke_factory(
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            timeout_s=timeout_s,
+            max_retries=max_retries,
+            retry_backoff_s=retry_backoff_s,
+            retry_http_codes=retry_http_codes,
+        )
     raise ValueError(f'unknown provider: {provider}')
 
 
