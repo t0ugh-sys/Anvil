@@ -331,11 +331,90 @@ def fetch_url_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
         text = re.sub(r' +', ' ', text)
         
         # Limit output size
-        max_chars = int(str(args.get('max_chars', '5000')))
+        max_chars = 5000
         if len(text) > max_chars:
             text = text[:max_chars] + f'\n\n... (truncated, total {len(text)} chars)'
         
         return ToolResult(id=call_id, ok=True, output=text.strip(), error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output='', error=str(exc))
+
+
+def analyze_memory_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+    """Analyze past runs from memory store to learn patterns and insights.
+    
+    Args:
+        memory_dir: Path to the memory store directory (default: .loopagent/runs)
+        goal_filter: Optional goal to filter runs by
+        limit: Number of recent runs to analyze (default: 5)
+    """
+    call_id = str(args.get('id', 'analyze_memory'))
+    memory_dir = str(args.get('memory_dir', '.loopagent/runs'))
+    goal_filter = str(args.get('goal_filter', '')).strip()
+    limit = int(str(args.get('limit', '5')))
+    
+    try:
+        memory_path = Path(memory_dir)
+        if not memory_path.exists():
+            return ToolResult(id=call_id, ok=False, output='', error=f'memory directory not found: {memory_dir}')
+        
+        # Find all run directories
+        run_dirs = sorted([d for d in memory_path.iterdir() if d.is_dir()], key=lambda x: x.name, reverse=True)
+        run_dirs = run_dirs[:limit]
+        
+        if not run_dirs:
+            return ToolResult(id=call_id, ok=True, output='No past runs found in memory', error=None)
+        
+        analysis: list[str] = []
+        total_runs = 0
+        completed_runs = 0
+        failed_runs = 0
+        
+        for run_dir in run_dirs:
+            summary_file = run_dir / 'summary.json'
+            if not summary_file.exists():
+                continue
+            
+            try:
+                with summary_file.open(encoding='utf-8') as f:
+                    summary = json.load(f)
+                
+                goal = summary.get('goal', '')
+                if goal_filter and goal_filter.lower() not in goal.lower():
+                    continue
+                
+                total_runs += 1
+                done = summary.get('done', False)
+                stop_reason = summary.get('stop_reason', 'unknown')
+                steps = summary.get('steps', 0)
+                
+                if done:
+                    completed_runs += 1
+                else:
+                    failed_runs += 1
+                
+                analysis.append(f'Run: {run_dir.name}')
+                analysis.append(f'  Goal: {goal[:80]}...' if len(goal) > 80 else f'  Goal: {goal}')
+                analysis.append(f'  Result: {"✓ Completed" if done else "✗ Failed"} (stop: {stop_reason})')
+                analysis.append(f'  Steps: {steps}')
+                analysis.append('')
+            except Exception:
+                continue
+        
+        # Build summary
+        summary_text = [
+            f'=== Memory Analysis (Last {limit} runs) ===',
+            f'Total runs analyzed: {total_runs}',
+            f'Completed: {completed_runs}',
+            f'Failed: {failed_runs}',
+            f'Success rate: {completed_runs/total_runs*100:.1f}%' if total_runs > 0 else 'N/A',
+            '',
+            '--- Recent Runs ---',
+            ''
+        ]
+        summary_text.extend(analysis)
+        
+        return ToolResult(id=call_id, ok=True, output='\n'.join(summary_text), error=None)
     except Exception as exc:
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
@@ -349,6 +428,7 @@ def build_default_tools() -> dict[str, ToolFn]:
         'run_command': run_command_tool,
         'web_search': web_search_tool,
         'fetch_url': fetch_url_tool,
+        'analyze_memory': analyze_memory_tool,
     }
 
 
