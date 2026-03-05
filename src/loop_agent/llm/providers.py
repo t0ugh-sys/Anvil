@@ -48,15 +48,27 @@ def _openai_compatible_invoke_factory(
     model: str,
     temperature: float,
     timeout_s: float,
+    wire_api: str,
 ) -> InvokeFn:
-    endpoint = base_url.rstrip('/') + '/chat/completions'
+    base = base_url.rstrip('/')
+    if wire_api == 'responses':
+        endpoint = base + '/responses'
+    else:
+        endpoint = base + '/chat/completions'
 
     def invoke(prompt: str) -> str:
-        payload = {
-            'model': model,
-            'messages': [{'role': 'user', 'content': prompt}],
-            'temperature': temperature,
-        }
+        if wire_api == 'responses':
+            payload = {
+                'model': model,
+                'input': prompt,
+                'temperature': temperature,
+            }
+        else:
+            payload = {
+                'model': model,
+                'messages': [{'role': 'user', 'content': prompt}],
+                'temperature': temperature,
+            }
         body = json.dumps(payload).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',
@@ -66,6 +78,30 @@ def _openai_compatible_invoke_factory(
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             raw = response.read().decode('utf-8')
         data = json.loads(raw)
+        if wire_api == 'responses':
+            output_text = data.get('output_text')
+            if isinstance(output_text, str) and output_text:
+                return output_text
+            output = data.get('output', [])
+            if isinstance(output, list):
+                fragments: list[str] = []
+                for item in output:
+                    if not isinstance(item, dict):
+                        continue
+                    content = item.get('content', [])
+                    if not isinstance(content, list):
+                        continue
+                    for piece in content:
+                        if not isinstance(piece, dict):
+                            continue
+                        text = piece.get('text')
+                        if isinstance(text, str):
+                            fragments.append(text)
+                merged = ''.join(fragments).strip()
+                if merged:
+                    return merged
+            raise ValueError('invalid responses output: no output_text/content')
+
         choices = data.get('choices', [])
         if not isinstance(choices, list) or not choices:
             raise ValueError('invalid openai-compatible response: choices missing')
@@ -94,6 +130,9 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
         base_url = str(getattr(args, 'base_url', '')).strip()
         if not base_url:
             raise ValueError('base_url is required for openai_compatible provider')
+        wire_api = str(getattr(args, 'wire_api', 'chat_completions')).strip()
+        if wire_api not in {'chat_completions', 'responses'}:
+            raise ValueError('wire_api must be one of: chat_completions,responses')
         api_key_env = str(getattr(args, 'api_key_env', 'OPENAI_API_KEY'))
         api_key = os.getenv(api_key_env, '').strip()
         if not api_key:
@@ -106,6 +145,7 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
             model=model,
             temperature=temperature,
             timeout_s=timeout_s,
+            wire_api=wire_api,
         )
 
     raise ValueError(f'unknown provider: {provider}')

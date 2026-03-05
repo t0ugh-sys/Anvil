@@ -95,14 +95,21 @@ OpenAI-compatible provider 示例：
 
 ```bash
 set OPENAI_API_KEY=sk-xxx
-python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1
+python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1 --wire-api chat_completions
+```
+
+如果服务端是 Responses 协议（例如 `wire_api=responses`）：
+
+```bash
+set OPENAI_API_KEY=sk-xxx
+python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-5.3-codex --base-url https://codex-api.packycode.com/v1 --wire-api responses
 ```
 
 OpenClaw-style `code` 子命令同样支持 provider/model 切换：
 
 ```bash
 set OPENAI_API_KEY=sk-xxx
-python -m loop_agent.openclaw_cli code --goal "fix failing test" --workspace . --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1
+python -m loop_agent.openclaw_cli code --goal "fix failing test" --workspace . --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1 --wire-api chat_completions
 ```
 
 机器可读输出（便于 CI 或平台接入）：

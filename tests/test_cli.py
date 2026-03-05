@@ -33,11 +33,14 @@ class CliTests(unittest.TestCase):
                 'mock',
                 '--model',
                 'qwen-max',
+                '--wire-api',
+                'responses',
             ]
         )
         self.assertEqual(args.strategy, 'json_llm')
         self.assertEqual(args.provider, 'mock')
         self.assertEqual(args.model, 'qwen-max')
+        self.assertEqual(args.wire_api, 'responses')
 
     def test_should_read_goal_from_utf8_file(self) -> None:
         parser = build_parser(build_default_registry())

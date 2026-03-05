@@ -28,6 +28,7 @@ def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
     parser.add_argument('--provider', choices=['mock', 'openai_compatible'], default='mock')
     parser.add_argument('--model', default='mock-model')
     parser.add_argument('--base-url', default='')
+    parser.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
     parser.add_argument('--api-key-env', default='OPENAI_API_KEY')
     parser.add_argument('--temperature', type=float, default=0.2)
     parser.add_argument('--provider-timeout-s', type=float, default=60.0)

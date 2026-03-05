@@ -91,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument('--provider', choices=['mock', 'openai_compatible'], default='mock')
     code.add_argument('--model', default='mock-model')
     code.add_argument('--base-url', default='')
+    code.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
     code.add_argument('--api-key-env', default='OPENAI_API_KEY')
     code.add_argument('--temperature', type=float, default=0.2)
     code.add_argument('--provider-timeout-s', type=float, default=60.0)
@@ -122,4 +123,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-

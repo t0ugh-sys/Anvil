@@ -33,6 +33,7 @@ class StepRegistryTests(unittest.TestCase):
             provider='mock',
             model='mock-model-a',
             base_url='',
+            wire_api='chat_completions',
             api_key_env='OPENAI_API_KEY',
             temperature=0.2,
             provider_timeout_s=30.0,
