@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -227,6 +231,85 @@ def run_command_tool(context: ToolContext, args: dict[str, object]) -> ToolResul
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
+def web_search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+    """Search the web using DuckDuckGo HTML search (no API key required)."""
+    query = str(args.get('query', '')).strip()
+    call_id = str(args.get('id', 'web_search'))
+    if not query:
+        return ToolResult(id=call_id, ok=False, output='', error='query is required')
+
+    try:
+        # Use DuckDuckGo HTML search
+        encoded_query = urllib.parse.quote_plus(query)
+        url = f'https://html.duckduckgo.com/html/?q={encoded_query}'
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        request = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(request, timeout=30) as response:
+            html = response.read().decode('utf-8', errors='replace')
+        
+        # Parse results from HTML
+        results: list[str] = []
+        import re
+        # Match result blocks
+        pattern = r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.+?)</a>.*?<a class="result__snippet"[^>]*>(.+?)</a>'
+        matches = re.findall(pattern, html, re.DOTALL)
+        
+        for i, (link, title, snippet) in enumerate(matches[:10], 1):
+            # Clean up HTML tags from title and snippet
+            title_clean = re.sub(r'<[^>]+>', '', title).strip()
+            snippet_clean = re.sub(r'<[^>]+>', '', snippet).strip()
+            results.append(f'{i}. {title_clean}\n   URL: {link}\n   {snippet_clean[:200]}')
+        
+        if not results:
+            return ToolResult(id=call_id, ok=True, output='No results found', error=None)
+        
+        output = f'Found {len(results)} results:\n\n' + '\n\n'.join(results)
+        return ToolResult(id=call_id, ok=True, output=output, error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output='', error=str(exc))
+
+
+def fetch_url_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+    """Fetch content from a specific URL."""
+    url = str(args.get('url', '')).strip()
+    call_id = str(args.get('id', 'fetch_url'))
+    if not url:
+        return ToolResult(id=call_id, ok=False, output='', error='url is required')
+
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        request = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(request, timeout=30) as response:
+            html = response.read().decode('utf-8', errors='replace')
+        
+        # Simple HTML to text conversion - remove scripts, styles, and tags
+        import re
+        # Remove script and style elements
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        # Remove all HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # Clean up whitespace
+        text = re.sub(r'\n+', '\n', text)
+        text = re.sub(r' +', ' ', text)
+        
+        # Limit output size
+        max_chars = int(args.get('max_chars', 5000))
+        if len(text) > max_chars:
+            text = text[:max_chars] + f'\n\n... (truncated, total {len(text)} chars)'
+        
+        return ToolResult(id=call_id, ok=True, output=text.strip(), error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output='', error=str(exc))
+
+
 def build_default_tools() -> dict[str, ToolFn]:
     return {
         'read_file': read_file_tool,
@@ -234,6 +317,8 @@ def build_default_tools() -> dict[str, ToolFn]:
         'apply_patch': apply_patch_tool,
         'search': search_tool,
         'run_command': run_command_tool,
+        'web_search': web_search_tool,
+        'fetch_url': fetch_url_tool,
     }
 
 
