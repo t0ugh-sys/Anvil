@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..run_schema import SCHEMA_VERSION
+SCHEMA_VERSION = "run-schema-v1"  # keep in sync with loop_agent.run_schema.SCHEMA_VERSION
 from .base import MemoryContext
 
 
