@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from .agent_protocol import render_agent_step_schema
 from .coding_agent import run_coding_agent
 from .core.serialization import run_result_to_dict
 from .core.types import StopConfig
+from .doctor import format_doctor_report, run_provider_doctor
 from .llm.providers import build_invoke_from_args
 from .tools import build_default_tools
 
@@ -79,8 +81,25 @@ def _run_replay_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_doctor_command(args: argparse.Namespace) -> int:
+    api_key = os.getenv(args.api_key_env, '').strip()
+    payload = run_provider_doctor(
+        base_url=args.base_url,
+        model=args.model,
+        wire_api=args.wire_api,
+        timeout_s=args.provider_timeout_s,
+        api_key_present=bool(api_key),
+        extra_headers=args.provider_header,
+    )
+    if args.output == 'json':
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(format_doctor_report(payload))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='openclaw_cli')
+    parser = argparse.ArgumentParser(prog='agent_cli')
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     code = subparsers.add_parser('code', help='run coding agent loop')
@@ -116,6 +135,17 @@ def build_parser() -> argparse.ArgumentParser:
     replay = subparsers.add_parser('replay', help='print events jsonl')
     replay.add_argument('--events-file', required=True)
     replay.set_defaults(handler=_run_replay_command)
+
+    doctor = subparsers.add_parser('doctor', help='diagnose provider connectivity and gateway status')
+    doctor.add_argument('--provider', choices=['openai_compatible'], default='openai_compatible')
+    doctor.add_argument('--model', default='gpt-5.3-codex')
+    doctor.add_argument('--base-url', required=True)
+    doctor.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='responses')
+    doctor.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    doctor.add_argument('--provider-timeout-s', type=float, default=20.0)
+    doctor.add_argument('--provider-header', action='append', default=[])
+    doctor.add_argument('--output', choices=['text', 'json'], default='text')
+    doctor.set_defaults(handler=_run_doctor_command)
 
     code.set_defaults(handler=_run_code_command)
     return parser

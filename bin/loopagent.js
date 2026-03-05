@@ -130,7 +130,7 @@ function ensureRuntime() {
 
 function runLoopAgentCLI(userArgs) {
   const py = venvPythonPath();
-  const args = ['-m', 'loop_agent.openclaw_cli', ...userArgs];
+  const args = ['-m', 'loop_agent.agent_cli', ...userArgs];
   const child = cp.spawn(py, args, { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code === null ? 1 : code));
 }
@@ -141,4 +141,3 @@ function main() {
 }
 
 main();
-

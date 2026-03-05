@@ -1,7 +1,7 @@
 {
   "name": "@t0ugh-sys/loopagent",
   "version": "0.1.0",
-  "description": "OpenClaw-style CLI wrapper for LoopAgent Python runtime",
+  "description": "Agent CLI wrapper for LoopAgent Python runtime",
   "bin": {
     "loopagent": "bin/loopagent.js"
   },
@@ -19,4 +19,3 @@
   },
   "license": "MIT"
 }
-

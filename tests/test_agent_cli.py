@@ -7,14 +7,30 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.openclaw_cli import _run_code_command, build_parser
+from loop_agent.agent_cli import _run_code_command, build_parser
 
 
-class OpenClawCliTests(unittest.TestCase):
+class AgentCliTests(unittest.TestCase):
     def test_should_list_tools_subcommand(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['tools'])
         self.assertEqual(args.command, 'tools')
+
+    def test_should_parse_doctor_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'doctor',
+                '--base-url',
+                'https://example.com/v1',
+                '--model',
+                'gpt-5.3-codex',
+                '--wire-api',
+                'responses',
+            ]
+        )
+        self.assertEqual(args.command, 'doctor')
+        self.assertEqual(args.base_url, 'https://example.com/v1')
 
     def test_should_run_code_with_mock_provider(self) -> None:
         parser = build_parser()

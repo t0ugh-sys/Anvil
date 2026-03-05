@@ -33,11 +33,11 @@ loopagent code --goal "inspect README then finish" --workspace . --provider mock
 python -m loop_agent.cli --goal "write a one-line self introduction" --strategy demo --output json
 ```
 
-OpenClaw-style CLI（子命令）：
+Agent CLI（子命令）：
 
 ```bash
-python -m loop_agent.openclaw_cli tools
-python -m loop_agent.openclaw_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
+python -m loop_agent.agent_cli tools
+python -m loop_agent.agent_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
 
 CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.github/workflows/ci.yml`）。
@@ -85,7 +85,7 @@ $env:PYTHONPATH="src"
 conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
 ```
 
-切换模型（OpenClaw-style 参数化切换）：
+切换模型（参数化切换）：
 
 ```bash
 python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider mock --model qwen-max
@@ -117,11 +117,11 @@ python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --
 python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-5.3-codex --fallback-model gpt-5-codex --base-url https://codex-api.packycode.com/v1 --wire-api responses --max-retries 3 --retry-backoff-s 1.0 --retry-http-code 502 --retry-http-code 503
 ```
 
-OpenClaw-style `code` 子命令同样支持 provider/model 切换：
+`code` 子命令同样支持 provider/model 切换：
 
 ```bash
 set OPENAI_API_KEY=sk-xxx
-python -m loop_agent.openclaw_cli code --goal "fix failing test" --workspace . --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1 --wire-api chat_completions
+python -m loop_agent.agent_cli code --goal "fix failing test" --workspace . --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1 --wire-api chat_completions
 ```
 
 机器可读输出（便于 CI 或平台接入）：
