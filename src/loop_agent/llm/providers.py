@@ -9,11 +9,31 @@ from typing import Callable
 InvokeFn = Callable[[str], str]
 
 
-def _mock_invoke_factory(model: str) -> InvokeFn:
+def _mock_invoke_factory(model: str, *, mode: str) -> InvokeFn:
     state = {'count': 0}
 
     def invoke(_: str) -> str:
         state['count'] += 1
+        if mode == 'coding':
+            if state['count'] == 1:
+                return json.dumps(
+                    {
+                        'thought': f'[{model}] read README first',
+                        'plan': ['read workspace docs', 'produce final response'],
+                        'tool_calls': [{'id': 'call_1', 'name': 'read_file', 'arguments': {'path': 'README.md'}}],
+                        'final': None,
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    'thought': f'[{model}] enough context',
+                    'plan': [],
+                    'tool_calls': [],
+                    'final': 'done',
+                },
+                ensure_ascii=False,
+            )
         if state['count'] >= 2:
             return json.dumps({'answer': f'[{model}] final answer', 'done': True}, ensure_ascii=False)
         return json.dumps({'answer': f'[{model}] draft answer', 'done': False}, ensure_ascii=False)
@@ -63,12 +83,12 @@ def _openai_compatible_invoke_factory(
     return invoke
 
 
-def build_invoke_from_args(args: argparse.Namespace) -> InvokeFn:
+def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop') -> InvokeFn:
     provider = str(getattr(args, 'provider', 'mock'))
     model = str(getattr(args, 'model', 'mock-model'))
 
     if provider == 'mock':
-        return _mock_invoke_factory(model=model)
+        return _mock_invoke_factory(model=model, mode=mode)
 
     if provider == 'openai_compatible':
         base_url = str(getattr(args, 'base_url', '')).strip()
@@ -89,4 +109,3 @@ def build_invoke_from_args(args: argparse.Namespace) -> InvokeFn:
         )
 
     raise ValueError(f'unknown provider: {provider}')
-

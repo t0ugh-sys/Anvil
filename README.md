@@ -20,6 +20,13 @@ python -m unittest discover -s tests -p "test_*.py" -v
 python -m loop_agent.cli --goal "write a one-line self introduction" --strategy demo --output json
 ```
 
+OpenClaw-style CLI（子命令）：
+
+```bash
+python -m loop_agent.openclaw_cli tools
+python -m loop_agent.openclaw_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
+```
+
 CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.github/workflows/ci.yml`）。
 
 核心引擎在 `step` 抛异常时不会让进程直接崩溃，而是返回 `stop_reason=step_error` 并附带错误信息，便于上层统一治理。
@@ -76,6 +83,13 @@ OpenAI-compatible provider 示例：
 ```bash
 set OPENAI_API_KEY=sk-xxx
 python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1
+```
+
+OpenClaw-style `code` 子命令同样支持 provider/model 切换：
+
+```bash
+set OPENAI_API_KEY=sk-xxx
+python -m loop_agent.openclaw_cli code --goal "fix failing test" --workspace . --provider openai_compatible --model gpt-4o-mini --base-url https://api.openai.com/v1
 ```
 
 机器可读输出（便于 CI 或平台接入）：
