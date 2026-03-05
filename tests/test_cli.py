@@ -5,6 +5,9 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
+import uuid
+import shutil
 
 import _bootstrap  # noqa: F401
 
@@ -40,6 +43,7 @@ class CliTests(unittest.TestCase):
         args = parser.parse_args(['--goal', 'x', '--observer-file', 'events.jsonl', '--exit-on-failure'])
         self.assertEqual(args.observer_file, 'events.jsonl')
         self.assertTrue(args.exit_on_failure)
+        self.assertTrue(args.record_run)
 
     def test_should_reject_empty_goal(self) -> None:
         args = argparse.Namespace(goal='   ', goal_file=None)
@@ -85,6 +89,37 @@ class CliTests(unittest.TestCase):
         args = parser.parse_args(['--goal', 'x', '--strategy', 'json_stub', '--max-steps', '1'])
         _, exit_code = execute(args, build_default_registry())
         self.assertEqual(exit_code, 0)
+
+    def test_should_create_run_directory_by_default(self) -> None:
+        parser = build_parser(build_default_registry())
+        tmp_dir = Path('tests/.tmp') / f'run-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            args = parser.parse_args(['--goal', 'x', '--runs-dir', str(tmp_dir), '--output', 'json'])
+            rendered, exit_code = execute(args, build_default_registry())
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(rendered)
+            run_dir = payload.get('run_dir', '')
+            self.assertTrue(run_dir)
+            self.assertTrue(Path(run_dir).exists())
+            self.assertTrue((Path(run_dir) / 'events.jsonl').exists())
+            self.assertTrue((Path(run_dir) / 'summary.json').exists())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_not_create_run_directory_when_disabled(self) -> None:
+        parser = build_parser(build_default_registry())
+        tmp_dir = Path('tests/.tmp') / f'run-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            args = parser.parse_args(['--goal', 'x', '--runs-dir', str(tmp_dir), '--no-record-run', '--output', 'json'])
+            rendered, exit_code = execute(args, build_default_registry())
+            self.assertEqual(exit_code, 0)
+            payload = json.loads(rendered)
+            self.assertNotIn('run_dir', payload)
+            self.assertEqual(list(Path(tmp_dir).iterdir()), [])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':

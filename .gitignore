@@ -11,4 +11,5 @@ dist/
 *.egg-info/
 .venv/
 goal.txt
-
+runs/
+AGENTS.md

@@ -7,15 +7,28 @@
 - Requires Python 3.11+
 - 若使用 Python 3.8/3.9/3.10，可能在导入阶段因 `dict[str, Any]` 等类型语法直接报错（这不是业务逻辑错误）
 
-最短可执行命令（不依赖 conda）：
+## 最短可执行路径（推荐默认）
 
 ```bash
 python -m pip install -e .
 python -m unittest -v
 ```
 
+运行 CLI：
+
+```bash
+python -m loop_agent.cli --goal "write a one-line self introduction" --strategy demo
+```
+
+CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.github/workflows/ci.yml`）。
+
 核心引擎在 `step` 抛异常时不会让进程直接崩溃，而是返回 `stop_reason=step_error` 并附带错误信息，便于上层统一治理。
 核心引擎支持可选 `observer` 事件回调，便于接日志、埋点和监控系统。
+
+## 依赖说明
+
+- core（`src/loop_agent/`）是 stdlib-only
+- `requirements.txt` 仅作为 examples/扩展依赖占位
 
 ## 结构
 
@@ -23,7 +36,7 @@ python -m unittest -v
 - `tests/`：单元测试（`unittest`）
 - `examples/`：可选示例（可能需要额外依赖）
 
-## 快速开始（运行测试）
+## 快速开始（Conda，可选）
 
 在项目根目录执行：
 
@@ -71,6 +84,14 @@ conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --go
 $env:PYTHONPATH="src"
 conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --max-steps 1 --exit-on-failure
 ```
+
+基础运行记录（默认开启）：
+
+- 每次 CLI 运行会在 `runs/<timestamp>/` 生成：
+- `events.jsonl`：step/tool/stop 事件流
+- `summary.json`：本次运行摘要
+
+可通过 `--no-record-run` 关闭，或通过 `--runs-dir` 修改记录目录。
 
 示例 `goal.txt` 请用 UTF-8 保存，例如内容为：
 

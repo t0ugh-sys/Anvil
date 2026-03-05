@@ -1,3 +1,7 @@
-# 核心实现不依赖第三方库（stdlib-only）
-# 如需接入真实大模型 SDK，请在企业内部按需新增并固定版本
-
+# LoopAgent core 是 stdlib-only，不依赖第三方包。
+# 默认安装/测试请使用：
+#   python -m pip install -e .
+#   python -m unittest -v
+#
+# 本文件仅用于 examples 或项目扩展依赖占位。
+# 如需接入真实模型 SDK，请在此处按需新增并固定版本。
