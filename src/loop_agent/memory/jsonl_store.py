@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..run_schema import SCHEMA_VERSION
 from .base import MemoryContext
 
 
