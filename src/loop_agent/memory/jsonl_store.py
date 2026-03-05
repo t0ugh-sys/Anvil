@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "run-schema-v1"  # keep in sync with loop_agent.run_schema.SCHEMA_VERSION
+from ..run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 from .base import MemoryContext
 
 
@@ -51,9 +51,17 @@ class JsonlMemoryStore:
             self._write_summary(_default_summary())
 
     def on_event(self, event: str, payload: dict[str, Any]) -> None:
-        row = {'event': event, 'payload': payload}
+        step = payload.get('step')
+        step_index = step if isinstance(step, int) else None
+        row = EventRow(
+            schema_version=SCHEMA_VERSION,
+            ts=utc_now_iso(),
+            event=event,
+            step=step_index,
+            payload=payload,
+        )
         with self._events_file.open('a', encoding='utf-8') as file:
-            file.write(json.dumps(row, ensure_ascii=False))
+            file.write(json.dumps(row.to_dict(), ensure_ascii=False))
             file.write('\n')
         self._update_state(event, payload)
         event_count = self._count_events()
