@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
+
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -26,9 +28,18 @@ class RunRecorder:
         return cls(run_dir=run_dir, events_file=events_file)
 
     def write_event(self, event: str, payload: dict[str, Any]) -> None:
-        row = {'event': event, 'payload': payload}
+        # Stable event envelope for replay/debugging.
+        step = payload.get('step')
+        step_index = step if isinstance(step, int) else None
+        row = EventRow(
+            schema_version=SCHEMA_VERSION,
+            ts=utc_now_iso(),
+            event=event,
+            step=step_index,
+            payload=payload,
+        )
         with self.events_file.open('a', encoding='utf-8') as file:
-            file.write(json.dumps(row, ensure_ascii=False))
+            file.write(json.dumps(row.to_dict(), ensure_ascii=False))
             file.write('\n')
 
     def write_summary(self, payload: dict[str, Any]) -> None:
