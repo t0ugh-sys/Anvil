@@ -5,19 +5,19 @@
 ## Python 版本要求（必读）
 
 - Requires Python 3.11+
-- 若使用 Python 3.8/3.9/3.10，可能在导入阶段因 `dict[str, Any]` 等类型语法直接报错（这不是业务逻辑错误）
+- 若使用 Python 3.8/3.9/3.10，可能在导入阶段因 `dict[str, Any]` 等类型语法报错（例如 `TypeError: 'type' object is not subscriptable`）
 
 ## 最短可执行路径（推荐默认）
 
 ```bash
 python -m pip install -e .
-python -m unittest -v
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 运行 CLI：
 
 ```bash
-python -m loop_agent.cli --goal "write a one-line self introduction" --strategy demo
+python -m loop_agent.cli --goal "write a one-line self introduction" --strategy demo --output json
 ```
 
 CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.github/workflows/ci.yml`）。
@@ -36,7 +36,7 @@ CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.githu
 - `tests/`：单元测试（`unittest`）
 - `examples/`：可选示例（可能需要额外依赖）
 
-## 快速开始（Conda，可选）
+## 可选：Conda 方式
 
 在项目根目录执行：
 
@@ -128,7 +128,7 @@ conda --no-plugins run --no-capture-output -n base python .\examples\json_loop_s
 
 ## 推荐用法（安装为包）
 
-在 CI/项目里更推荐先安装为可编辑包，再运行测试/命令：
+开源场景默认推荐上面的 `pip install -e .` 路径；下面是 Conda 环境里的等价写法：
 
 ```powershell
 conda --no-plugins run -n base python -m pip install -e .
