@@ -9,6 +9,7 @@ import urllib.request
 from typing import Callable, Dict, List, Optional, Set
 
 InvokeFn = Callable[[str], str]
+ChatInvokeFn = Callable[[List[Dict[str, str]]], str]
 
 DEFAULT_RETRY_HTTP_CODES = {502, 503, 504, 524}
 
@@ -147,6 +148,101 @@ class ProviderHttpError(Exception):
         self.body = body
 
 
+def openai_compatible_chat_invoke_factory(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    fallback_models: List[str],
+    temperature: float,
+    timeout_s: float,
+    debug: bool,
+    extra_headers: Dict[str, str],
+    max_retries: int,
+    retry_backoff_s: float,
+    retry_http_codes: Set[int],
+) -> ChatInvokeFn:
+    """Return a chat invoke function that accepts OpenAI chat messages.
+
+    `wire_api` is intentionally not supported here yet; TUI uses chat/completions.
+    """
+
+    base = base_url.rstrip('/')
+    endpoint = base + '/chat/completions'
+
+    models_to_try = [model, *fallback_models]
+
+    def _request_once(messages: List[Dict[str, str]], current_model: str) -> dict:
+        payload = {
+            'model': current_model,
+            'messages': messages,
+            'temperature': temperature,
+        }
+        body = json.dumps(payload).encode('utf-8')
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+            'Authorization': f'Bearer {api_key}',
+        }
+        headers.update(extra_headers)
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                raw = response.read().decode('utf-8')
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = ''
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return json.loads(raw)
+
+    def invoke(messages: List[Dict[str, str]]) -> str:
+        last_http_error: Optional[ProviderHttpError] = None
+
+        for current_model in models_to_try:
+            data = None
+            for attempt in range(max_retries + 1):
+                try:
+                    data = _request_once(messages, current_model)
+                    break
+                except ProviderHttpError as exc:
+                    last_http_error = exc
+                    should_retry = exc.status_code in retry_http_codes and attempt < max_retries
+                    if should_retry:
+                        time.sleep(retry_backoff_s * (2 ** attempt))
+                        continue
+                    break
+            if data is None:
+                continue
+
+            choices = data.get('choices', [])
+            if not isinstance(choices, list) or not choices:
+                raise ValueError('invalid openai-compatible response: choices missing')
+            first = choices[0]
+            if not isinstance(first, dict):
+                raise ValueError('invalid openai-compatible response: choice item invalid')
+            message = first.get('message', {})
+            if not isinstance(message, dict):
+                raise ValueError('invalid openai-compatible response: message invalid')
+            content = message.get('content', '')
+            if not isinstance(content, str):
+                raise ValueError('invalid openai-compatible response: content invalid')
+            return content
+
+        if last_http_error is not None:
+            if debug:
+                raise ValueError(f'HTTP {last_http_error.status_code}: {last_http_error.body}')
+            raise ValueError(
+                f'HTTP {last_http_error.status_code}: request failed (enable --provider-debug for details)'
+            )
+        raise ValueError('provider request failed without response')
+
+    return invoke
+
+
 def _mock_invoke_factory(model: str, *, mode: str) -> InvokeFn:
     state = {'count': 0}
 
@@ -194,6 +290,7 @@ def _openai_compatible_invoke_factory(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
 ) -> InvokeFn:
+
     base = base_url.rstrip('/')
     if wire_api == 'responses':
         endpoint = base + '/responses'
@@ -206,7 +303,11 @@ def _openai_compatible_invoke_factory(
         if wire_api == 'responses':
             payload = {'model': current_model, 'input': prompt, 'temperature': temperature}
         else:
-            payload = {'model': current_model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': temperature}
+            payload = {
+                'model': current_model,
+                'messages': [{'role': 'user', 'content': prompt}],
+                'temperature': temperature,
+            }
         body = json.dumps(payload).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',

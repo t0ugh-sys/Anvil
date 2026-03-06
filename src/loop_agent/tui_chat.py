@@ -18,21 +18,21 @@ class ChatConfig:
     provider: str
     model: str
     base_url: str
-    wire_api: str
     api_key_env: str
     temperature: float
     provider_timeout_s: float
+    history_limit: int
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog='loopagent-chat')
-    p.add_argument('--provider', choices=['openai_compatible', 'anthropic', 'gemini'], default='openai_compatible')
+    p.add_argument('--provider', choices=['openai_compatible'], default='openai_compatible')
     p.add_argument('--model', default='gpt-4o-mini')
     p.add_argument('--base-url', default='https://api.openai.com/v1')
-    p.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
     p.add_argument('--api-key-env', default='OPENAI_API_KEY')
     p.add_argument('--temperature', type=float, default=0.2)
     p.add_argument('--provider-timeout-s', type=float, default=60.0)
+    p.add_argument('--history-limit', type=int, default=30, help='max messages to send as context')
     p.add_argument('--chat-id', default='')
     p.add_argument('--chat-dir', default='.loopagent/chats', help='chat logs root dir')
     return p
@@ -48,39 +48,25 @@ def _require_textual():
         )
 
 
-def _load_invoke(provider: str):
-    # Lazy import to keep core importable without optional deps.
-    from .llm.providers import OpenAICompatibleInvoke, build_anthropic_invoke, build_gemini_invoke
-
-    if provider == 'openai_compatible':
-        return OpenAICompatibleInvoke
-    if provider == 'anthropic':
-        return build_anthropic_invoke
-    if provider == 'gemini':
-        return build_gemini_invoke
-    raise ValueError(f'unknown provider: {provider}')
-
-
-def _build_openai_compatible_invoke(cfg: ChatConfig):
-    from .llm.providers import OpenAICompatibleInvoke
+def _build_openai_compatible_chat_invoke(cfg: ChatConfig):
+    from .llm.providers import openai_compatible_chat_invoke_factory
 
     api_key = os.getenv(cfg.api_key_env, '').strip()
     if not api_key:
         raise SystemExit(f'missing api key env: {cfg.api_key_env}')
 
-    return OpenAICompatibleInvoke(
+    return openai_compatible_chat_invoke_factory(
         base_url=cfg.base_url,
-        model=cfg.model,
-        wire_api=cfg.wire_api,
         api_key=api_key,
-        timeout_s=cfg.provider_timeout_s,
+        model=cfg.model,
+        fallback_models=[],
         temperature=cfg.temperature,
+        timeout_s=cfg.provider_timeout_s,
         debug=False,
-        extra_headers=[],
+        extra_headers={},
         max_retries=2,
         retry_backoff_s=1.0,
-        retry_http_codes=[],
-        fallback_models=[],
+        retry_http_codes={502, 503, 504, 524},
     )
 
 
@@ -114,15 +100,32 @@ def run(argv: Optional[list[str]] = None) -> int:
         provider=args.provider,
         model=args.model,
         base_url=args.base_url,
-        wire_api=args.wire_api,
         api_key_env=args.api_key_env,
         temperature=float(args.temperature),
         provider_timeout_s=float(args.provider_timeout_s),
+        history_limit=int(args.history_limit),
     )
 
-    invoke = _build_openai_compatible_invoke(cfg) if cfg.provider == 'openai_compatible' else None
+    invoke = _build_openai_compatible_chat_invoke(cfg)
 
     messages_path = chat_dir / 'messages.jsonl'
+
+    def load_messages(limit: int) -> list[dict[str, str]]:
+        if not messages_path.exists():
+            return []
+        out: list[dict[str, str]] = []
+        for line in messages_path.read_text(encoding='utf-8').splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            role = row.get('role')
+            text = row.get('text')
+            if role in {'user', 'assistant'} and isinstance(text, str):
+                out.append({'role': role, 'content': text})
+        return out[-limit:] if limit > 0 else out
 
     class ChatApp(App):
         CSS = """
@@ -167,21 +170,29 @@ def run(argv: Optional[list[str]] = None) -> int:
                 self.exit()
                 return
 
+            if text == '/reset':
+                if messages_path.exists():
+                    backup = messages_path.with_suffix('.bak')
+                    backup.write_text(messages_path.read_text(encoding='utf-8'), encoding='utf-8')
+                    messages_path.unlink()
+                log = self.query_one('#log', Static)
+                log.update(
+                    f'Chat: {chat_id}\nProvider: {cfg.provider}\nModel: {cfg.model}\nBase URL: {cfg.base_url}\n'
+                    f'Logs: {chat_dir}\n(reset: messages.jsonl cleared; backup: messages.bak)\n'
+                )
+                return
+
             log = self.query_one('#log', Static)
             existing = str(log.renderable)
             log.update(existing + f'\n> {text}\n')
 
             _append_jsonl(messages_path, {'role': 'user', 'text': text, 'ts': datetime.now(timezone.utc).isoformat()})
 
-            if invoke is None:
-                reply = 'provider not implemented in tui yet'
-            else:
-                # Simple prompt: this is a chat TUI MVP. We can later upgrade to real chat messages.
-                prompt = text
-                try:
-                    reply = invoke(prompt)
-                except Exception as e:
-                    reply = f'ERROR: {e}'
+            try:
+                messages = load_messages(cfg.history_limit)
+                reply = invoke(messages)
+            except Exception as e:
+                reply = f'ERROR: {e}'
 
             _append_jsonl(
                 messages_path,
