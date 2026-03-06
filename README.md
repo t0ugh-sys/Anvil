@@ -1,14 +1,11 @@
 # LoopAgent
 
-> Requires **Python 3.10+**
-
-这是一个可扩展的“循环执行 Agent”项目骨架：核心库只使用 Python 标准库，支持持续迭代执行，直到满足 `done=True` 或命中停止条件（超时/最大步数/外部取消）。
+这是一个可扩展的"循环执行 Agent"项目骨架：核心库只使用 Python 标准库，支持持续迭代执行，直到满足 `done=True` 或命中停止条件（超时/最大步数/外部取消）。
 
 ## Python 版本要求
 
 - Requires Python 3.10+
-- Python 3.10 兼容说明：项目已避免使用 `dict[str, Any]`、`X | Y` 等仅 3.11+ 才支持的类型语法；CI 覆盖 3.10/3.11/3.12
-- 若使用 Python 3.9 或更低版本，可能在导入阶段因类型语法不兼容报错（例如 `TypeError: 'type' object is not subscriptable`）
+- 若使用 Python 3.9 或更低版本，可能在导入阶段因 `dict[str, Any]` 等类型语法报错（例如 `TypeError: 'type' object is not subscriptable`）
 
 ## 最短可执行路径（推荐默认）
 
@@ -29,7 +26,7 @@ loopagent code --goal "inspect README then finish" --workspace . --provider mock
 
 说明：
 
-- 首次运行会自动检测 Python 3.10+、创建本地虚拟环境并安装当前包
+- 首次运行会自动检测 Python 3.11+、创建本地虚拟环境并安装当前包
 - 可通过 `LOOPAGENT_PYTHON` 指定 Python 可执行文件
 
 运行 CLI：
@@ -61,25 +58,20 @@ CI 使用 GitHub Actions 在 Python 3.11/3.12 上运行 `unittest`（见 `.githu
 - `tests/`：单元测试（`unittest`）
 - `examples/`：可选示例（可能需要额外依赖）
 
-## 快速开始（安装与运行测试）
+## 可选：Conda 方式
 
 在项目根目录执行：
 
-```bash
-python -m pip install -e .
-python -m unittest discover -s tests -p "test_*.py" -v
+```powershell
+$env:PYTHONPATH="src"
+conda --no-plugins run --no-capture-output -n base python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 ## 快速开始（运行 CLI）
 
 ```powershell
-python -m loop_agent.cli --goal-file .\goal.txt --strategy demo
-```
-
-conda 等价命令：
-
-```powershell
-conda --no-plugins run --no-capture-output -n <your_env> python -m loop_agent.cli --goal-file .\goal.txt --strategy demo
+$env:PYTHONPATH="src"
+conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy demo
 ```
 
 内置策略：
@@ -91,13 +83,8 @@ conda --no-plugins run --no-capture-output -n <your_env> python -m loop_agent.cl
 例如切换到 `json_stub`：
 
 ```powershell
-python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
-```
-
-conda 等价命令：
-
-```powershell
-conda --no-plugins run --no-capture-output -n <your_env> python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
+$env:PYTHONPATH="src"
+conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --strategy json_stub --history-window 2
 ```
 
 切换模型（参数化切换）：
@@ -156,7 +143,8 @@ python -m loop_agent.agent_cli code --goal "fix failing test" --workspace . --pr
 机器可读输出（便于 CI 或平台接入）：
 
 ```powershell
-python -m loop_agent.cli --goal-file .\goal.txt --output json --include-history
+$env:PYTHONPATH="src"
+conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt --output json --include-history
 ```
 
 事件落盘（JSONL）：
@@ -175,13 +163,9 @@ conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --go
 
 基础运行记录（默认开启）：
 
-- 每次 CLI 运行会在 `.loopagent/runs/<timestamp>/` 生成：
+- 每次 CLI 运行会在 `runs/<timestamp>/` 生成：
 - `events.jsonl`：step/tool/stop 事件流
 - `summary.json`：本次运行摘要
-
-Artifacts / Schema 文档：
-
-- `docs/artifacts-schema.md`
 
 可通过 `--no-record-run` 关闭，或通过 `--runs-dir` 修改记录目录。
 
@@ -214,7 +198,8 @@ CLI 参数：
 ## 运行示例（JSON 协议 + stub 模型）
 
 ```powershell
-python .\examples\json_loop_stub_demo.py
+$env:PYTHONPATH="src"
+conda --no-plugins run --no-capture-output -n base python .\examples\json_loop_stub_demo.py
 ```
 
 ## 推荐用法（安装为包）
@@ -222,9 +207,9 @@ python .\examples\json_loop_stub_demo.py
 开源场景默认推荐上面的 `pip install -e .` 路径；下面是 Conda 环境里的等价写法：
 
 ```powershell
-python -m pip install -e .
-python -m unittest discover -s tests -p "test_*.py" -v
-python -m loop_agent.cli --goal-file .\goal.txt
+conda --no-plugins run -n base python -m pip install -e .
+conda --no-plugins run --no-capture-output -n base python -m unittest discover -s tests -p "test_*.py" -v
+conda --no-plugins run --no-capture-output -n base python -m loop_agent.cli --goal-file .\goal.txt
 ```
 
 ## Skill 系统

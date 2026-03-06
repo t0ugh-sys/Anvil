@@ -19,22 +19,35 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import yaml
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None
 
 
-def load_yaml_config(path: Union[str, Path]) -> Dict[str, Any]:
-    """Load configuration from YAML file."""
+PathLike = Union[str, Path]
+
+
+def load_yaml_config(path: PathLike) -> Dict[str, Any]:
+    """Load configuration from a YAML file.
+
+    YAML support is optional. Install with: `pip install pyyaml`.
+    """
+
+    if yaml is None:
+        raise ModuleNotFoundError('missing optional dependency: pyyaml')
+
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f) or {}
 
 
-def load_json_config(path: Union[str, Path]) -> Dict[str, Any]:
+def load_json_config(path: PathLike) -> Dict[str, Any]:
     """Load configuration from JSON file."""
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def load_env_config(path: Union[str, Path]) -> Dict[str, Any]:
+def load_env_config(path: PathLike) -> Dict[str, Any]:
     """Load configuration from .env file."""
     config = {}
     with open(path, 'r', encoding='utf-8') as f:
@@ -69,7 +82,7 @@ DEFAULT_CONFIG_LOCATIONS = [
 ]
 
 
-def find_default_config() -> Optional[Path ]:
+def find_default_config() -> Optional[Path]:
     """Find default config file."""
     for loc in DEFAULT_CONFIG_LOCATIONS:
         path = Path(loc)
@@ -82,7 +95,7 @@ def find_default_config() -> Optional[Path ]:
     return None
 
 
-def load_config(config_path: Union[str, Optional[Path] ] = None) -> Dict[str, Any]:
+def load_config(config_path: Optional[PathLike] = None) -> Dict[str, Any]:
     """Load configuration from file or find default."""
     if config_path:
         path = Path(config_path)
