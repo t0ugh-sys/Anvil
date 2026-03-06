@@ -1,13 +1,14 @@
 # LoopAgent
 
-> Requires **Python 3.11+**
+> Requires **Python 3.10+**
 
 这是一个可扩展的“循环执行 Agent”项目骨架：核心库只使用 Python 标准库，支持持续迭代执行，直到满足 `done=True` 或命中停止条件（超时/最大步数/外部取消）。
 
 ## Python 版本要求
 
-- Requires Python 3.11+
-- 若使用 Python 3.10 或更低版本，可能在导入阶段因 `dict[str, Any]` 等类型语法报错（例如 `TypeError: 'type' object is not subscriptable`）
+- Requires Python 3.10+
+- Python 3.10 兼容说明：项目已避免使用 `dict[str, Any]`、`X | Y` 等仅 3.11+ 才支持的类型语法；CI 覆盖 3.10/3.11/3.12
+- 若使用 Python 3.9 或更低版本，可能在导入阶段因类型语法不兼容报错（例如 `TypeError: 'type' object is not subscriptable`）
 
 ## 最短可执行路径（推荐默认）
 
@@ -28,7 +29,7 @@ loopagent code --goal "inspect README then finish" --workspace . --provider mock
 
 说明：
 
-- 首次运行会自动检测 Python 3.11+、创建本地虚拟环境并安装当前包
+- 首次运行会自动检测 Python 3.10+、创建本地虚拟环境并安装当前包
 - 可通过 `LOOPAGENT_PYTHON` 指定 Python 可执行文件
 
 运行 CLI：
