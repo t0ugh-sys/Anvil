@@ -5,9 +5,40 @@ description = "Enterprise-grade loop agent skeleton (stdlib-only core)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [
+    { name = "LoopAgent Contributors" },
+]
+keywords = ["agent", "ai", "loop", "llm", "claude", "gemini", "openai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = []
+
+[project.optional-dependencies]
+browser = ["playwright"]
+all = ["playwright"]
+dev = ["pytest", "pytest-cov"]
+
+[project.scripts]
+loopagent = "loop_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/t0ugh-sys/LoopAgent"
+Repository = "https://github.com/t0ugh-sys/LoopAgent"
+Issues = "https://github.com/t0ugh-sys/LoopAgent/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+loop_agent = ["py.typed"]

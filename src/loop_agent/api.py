@@ -13,7 +13,7 @@ from typing import Any, Callable
 from loop_agent.agent_protocol import ToolResult
 from loop_agent.core.agent import LoopAgent
 from loop_agent.core.types import RunResult, StopConfig
-from loop_agent.coding_agent import CodingAgentState
+from loop_agent.coding_agent import CodingAgentState, DeciderFn
 from loop_agent.steps.json_loop import JsonLoopState, make_json_decision_step
 
 from .errors import ValidationError, validate_goal, validate_max_steps, validate_temperature
@@ -70,9 +70,10 @@ class LoopAgentAPI:
     
     def __init__(self, config: AgentConfig | None = None):
         self.config = config or AgentConfig()
-        self._invoke_fn: Callable[[str], str] | None = None
+        # Using Any for flexibility - actual decider has 5 parameters
+        self._invoke_fn: Any = None
     
-    def set_provider(self, invoke_fn: Callable[[str], str]) -> "LoopAgentAPI":
+    def set_provider(self, invoke_fn: Callable[..., str]) -> "LoopAgentAPI":
         """Set custom LLM provider function."""
         self._invoke_fn = invoke_fn
         return self
