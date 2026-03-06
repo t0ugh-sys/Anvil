@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  loopagent:
+    build: .
+    image: loopagent:latest
+    container_name: loopagent
+    volumes:
+      - .:/workspace
+    environment:
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace
+    command: ["--help"]
+
+  # Example: Run with OpenAI
+  loopagent-openai:
+    build: .
+    volumes:
+      - .:/workspace
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace
+    command: >
+      python -m loop_agent.agent_cli code
+      --goal "inspect README then finish"
+      --workspace .
+      --provider openai_compatible
+      --model gpt-4o-mini
+      --base-url https://api.openai.com/v1
+
+  # Example: Run with Anthropic
+  loopagent-anthropic:
+    build: .
+    volumes:
+      - .:/workspace
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace
+    command: >
+      python -m loop_agent.agent_cli code
+      --goal "inspect README then finish"
+      --workspace .
+      --provider anthropic
+      --model claude-3-haiku-20240307
+
+  # Example: Run with npm
+  loopagent-npm:
+    build: .
+    volumes:
+      - .:/workspace
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PYTHONUNBUFFERED=1
+    working_dir: /workspace
+    entrypoint: node
+    command: ["bin/loopagent.js", "code", "--goal", "inspect README then finish", "--workspace", ".", "--provider", "openai_compatible", "--model", "gpt-4o-mini"]
