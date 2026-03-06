@@ -14,3 +14,8 @@ goal.txt
 runs/
 AGENTS.md
 .loopagent/
+
+# Environment files
+.env
+.env.local
+*.log
