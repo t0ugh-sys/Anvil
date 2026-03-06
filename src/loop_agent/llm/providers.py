@@ -6,7 +6,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Callable
+from typing import Callable, Dict, List, Optional, Set
 
 InvokeFn = Callable[[str], str]
 
@@ -21,7 +21,7 @@ def _anthropic_invoke_factory(
     timeout_s: float,
     max_retries: int,
     retry_backoff_s: float,
-    retry_http_codes: set[int],
+    retry_http_codes: Set[int],
 ) -> InvokeFn:
     endpoint = 'https://api.anthropic.com/v1/messages'
     headers = {
@@ -53,7 +53,7 @@ def _anthropic_invoke_factory(
             raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
 
     def invoke(prompt: str) -> str:
-        last_http_error: ProviderHttpError | None = None
+        last_http_error: Optional[ProviderHttpError ] = None
         for attempt in range(max_retries + 1):
             try:
                 response = _request_once(prompt)
@@ -83,7 +83,7 @@ def _gemini_invoke_factory(
     timeout_s: float,
     max_retries: int,
     retry_backoff_s: float,
-    retry_http_codes: set[int],
+    retry_http_codes: Set[int],
 ) -> InvokeFn:
     base_url = 'https://generativelanguage.googleapis.com/v1'
     endpoint = f'{base_url}/models/{model}:generateContent?key={api_key}'
@@ -112,7 +112,7 @@ def _gemini_invoke_factory(
             raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
 
     def invoke(prompt: str) -> str:
-        last_http_error: ProviderHttpError | None = None
+        last_http_error: Optional[ProviderHttpError ] = None
         for attempt in range(max_retries + 1):
             try:
                 response = _request_once(prompt)
@@ -184,15 +184,15 @@ def _openai_compatible_invoke_factory(
     base_url: str,
     api_key: str,
     model: str,
-    fallback_models: list[str],
+    fallback_models: List[str],
     temperature: float,
     timeout_s: float,
     wire_api: str,
     debug: bool,
-    extra_headers: dict[str, str],
+    extra_headers: Dict[str, str],
     max_retries: int,
     retry_backoff_s: float,
-    retry_http_codes: set[int],
+    retry_http_codes: Set[int],
 ) -> InvokeFn:
     base = base_url.rstrip('/')
     if wire_api == 'responses':
@@ -229,7 +229,7 @@ def _openai_compatible_invoke_factory(
         return json.loads(raw)
 
     def invoke(prompt: str) -> str:
-        last_http_error: ProviderHttpError | None = None
+        last_http_error: Optional[ProviderHttpError ] = None
 
         for current_model in models_to_try:
             data = None
@@ -253,7 +253,7 @@ def _openai_compatible_invoke_factory(
                     return output_text
                 output = data.get('output', [])
                 if isinstance(output, list):
-                    fragments: list[str] = []
+                    fragments: List[str] = []
                     for item in output:
                         if not isinstance(item, dict):
                             continue
@@ -384,8 +384,8 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
     raise ValueError(f'unknown provider: {provider}')
 
 
-def parse_provider_headers(items: list[str]) -> dict[str, str]:
-    headers: dict[str, str] = {}
+def parse_provider_headers(items: List[str]) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
     for item in items:
         if ':' not in item:
             raise ValueError('provider header must be Key:Value format')

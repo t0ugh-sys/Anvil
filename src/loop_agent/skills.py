@@ -16,12 +16,9 @@ Usage:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
-from loop_agent.agent_protocol import ToolCall, ToolResult
-from loop_agent.tools import ToolContext
+from loop_agent.agent_protocol import ToolResult
 
 
 # Skill definition
@@ -31,17 +28,17 @@ class Skill:
     name: str
     description: str
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         """Return tools provided by this skill."""
         return {}
     
-    def get_prompt_context(self) -> dict[str, Any]:
+    def get_prompt_context(self) -> Dict[str, Any]:
         """Return additional context for prompts."""
         return {}
 
 
 # Built-in skills registry
-_SKILL_REGISTRY: dict[str, type[Skill]] = {}
+_SKILL_REGISTRY: Dict[str, type[Skill]] = {}
 
 
 def register_skill(skill_class: type[Skill]) -> None:
@@ -49,7 +46,7 @@ def register_skill(skill_class: type[Skill]) -> None:
     _SKILL_REGISTRY[skill_class.name] = skill_class
 
 
-def get_skill(name: str) -> Skill | None:
+def get_skill(name: str) -> Optional[Skill ]:
     """Get a skill instance by name."""
     skill_class = _SKILL_REGISTRY.get(name)
     if skill_class:
@@ -57,7 +54,7 @@ def get_skill(name: str) -> Skill | None:
     return None
 
 
-def list_skills() -> list[str]:
+def list_skills() -> List[str]:
     """List all registered skills."""
     return list(_SKILL_REGISTRY.keys())
 
@@ -69,7 +66,7 @@ class WebSearchSkill(Skill):
     name = "web_search"
     description = "Search the web and fetch URLs"
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         from loop_agent.tools import web_search_tool, fetch_url_tool
         return {
             'web_search': web_search_tool,
@@ -82,7 +79,7 @@ class MemorySkill(Skill):
     name = "memory"
     description = "Analyze past runs and learn patterns"
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         from loop_agent.tools import analyze_memory_tool
         return {
             'analyze_memory': analyze_memory_tool,
@@ -94,7 +91,7 @@ class FileSkill(Skill):
     name = "files"
     description = "Read, write, and search files"
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         from loop_agent.tools import read_file_tool, write_file_tool, apply_patch_tool, search_tool
         return {
             'read_file': read_file_tool,
@@ -109,7 +106,7 @@ class CommandSkill(Skill):
     name = "commands"
     description = "Run shell commands"
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         from loop_agent.tools import run_command_tool
         return {
             'run_command': run_command_tool,
@@ -124,19 +121,19 @@ class BrowserSkill(Skill):
     name = "browser"
     description = "Browser automation (requires playwright)"
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         # Lazy import - only load when skill is used
         try:
             from loop_agent.skills.browser_tools import get_browser_tools
             return get_browser_tools()
-        except ImportError as e:
+        except ImportError:
             # Return a error tool if playwright not installed
             def browser_not_available(args):
                 return ToolResult(
                     id=str(args.get('id', 'browser')),
                     ok=False,
                     output='',
-                    error=f"Browser skill requires playwright: pip install playwright"
+                    error="Browser skill requires playwright: pip install playwright"
                 )
             return {'browser': browser_not_available}
 
@@ -154,7 +151,7 @@ class SkillLoader:
     """Dynamic skill loader for external skills."""
     
     def __init__(self):
-        self._loaded_skills: dict[str, Skill] = {}
+        self._loaded_skills: Dict[str, Skill] = {}
     
     def load(self, name: str) -> bool:
         """Load a skill by name."""
@@ -189,22 +186,22 @@ class SkillLoader:
             return True
         return False
     
-    def get_tools(self) -> dict[str, Callable]:
+    def get_tools(self) -> Dict[str, Callable]:
         """Get all tools from loaded skills."""
-        tools: dict[str, Callable] = {}
+        tools: Dict[str, Callable] = {}
         for skill in self._loaded_skills.values():
             tools.update(skill.get_tools())
         return tools
     
-    def get_prompt_context(self) -> dict[str, Any]:
+    def get_prompt_context(self) -> Dict[str, Any]:
         """Get combined prompt context from all loaded skills."""
-        context: dict[str, Any] = {}
+        context: Dict[str, Any] = {}
         for skill in self._loaded_skills.values():
             ctx = skill.get_prompt_context()
             context.update(ctx)
         return context
     
-    def list_loaded(self) -> list[str]:
+    def list_loaded(self) -> List[str]:
         """List loaded skill names."""
         return list(self._loaded_skills.keys())
 
@@ -224,17 +221,17 @@ def unload_skill(name: str) -> bool:
     return _default_loader.unload(name)
 
 
-def build_skill_tools() -> dict[str, Callable]:
+def build_skill_tools() -> Dict[str, Callable]:
     """Get all tools from loaded skills."""
     return _default_loader.get_tools()
 
 
-def get_prompt_context() -> dict[str, Any]:
+def get_prompt_context() -> Dict[str, Any]:
     """Get combined prompt context from all loaded skills."""
     return _default_loader.get_prompt_context()
 
 
-def list_loaded_skills() -> list[str]:
+def list_loaded_skills() -> List[str]:
     """List all loaded skill names."""
     return _default_loader.list_loaded()
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Dict, Generic, Optional, Tuple, TypeVar
 
 StateT = TypeVar('StateT')
 
@@ -35,9 +35,9 @@ class StepContext(Generic[StateT]):
     step_index: int
     started_at_s: float
     now_s: float
-    history: tuple[str, ...]
-    state_summary: dict[str, Any] = field(default_factory=dict)
-    last_steps: tuple[str, ...] = field(default_factory=tuple)
+    history: Tuple[str, ...]
+    state_summary: Dict[str, Any] = field(default_factory=dict)
+    last_steps: Tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def elapsed_s(self) -> float:
@@ -49,7 +49,7 @@ class StepResult(Generic[StateT]):
     output: str
     state: StateT
     done: bool = False
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -59,20 +59,20 @@ class RunResult(Generic[StateT]):
     done: bool
     steps: int
     elapsed_s: float
-    history: tuple[str, ...]
+    history: Tuple[str, ...]
     stop_reason: StopReason
-    error: str | None = None
+    error: Optional[str ] = None
 
 
 StepFn = Callable[[StepContext[StateT]], StepResult[StateT]]
 CancelFn = Callable[[], bool]
-ObserverFn = Callable[[str, dict[str, Any]], None]
+ObserverFn = Callable[[str, Dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
 class ContextSnapshot:
-    state_summary: dict[str, Any] = field(default_factory=dict)
-    last_steps: tuple[str, ...] = field(default_factory=tuple)
+    state_summary: Dict[str, Any] = field(default_factory=dict)
+    last_steps: Tuple[str, ...] = field(default_factory=tuple)
 
 
 ContextProviderFn = Callable[[], ContextSnapshot]

@@ -6,7 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from .llm.providers import parse_provider_headers
 
@@ -14,12 +14,12 @@ from .llm.providers import parse_provider_headers
 @dataclass(frozen=True)
 class HttpProbeResult:
     ok: bool
-    status_code: int | None
+    status_code: Optional[int ]
     body_snippet: str
-    error: str | None = None
+    error: Optional[str ] = None
 
 
-def _http_probe(url: str, headers: dict[str, str], timeout_s: float) -> HttpProbeResult:
+def _http_probe(url: str, headers: Dict[str, str], timeout_s: float) -> HttpProbeResult:
     request = urllib.request.Request(url, headers=headers, method='GET')
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
@@ -43,16 +43,16 @@ def run_provider_doctor(
     wire_api: str,
     timeout_s: float,
     api_key_present: bool,
-    extra_headers: list[str],
-) -> dict[str, Any]:
+    extra_headers: List[str],
+) -> Dict[str, Any]:
     host = ''
     try:
         host = urllib.parse.urlparse(base_url).hostname or ''
     except Exception:
         host = ''
 
-    dns_ips: list[str] = []
-    dns_error: str | None = None
+    dns_ips: List[str] = []
+    dns_error: Optional[str ] = None
     if host:
         try:
             infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
@@ -68,7 +68,7 @@ def run_provider_doctor(
         dns_error = 'invalid host from base_url'
 
     tcp_ok = False
-    tcp_error: str | None = None
+    tcp_error: Optional[str ] = None
     if host:
         try:
             with socket.create_connection((host, 443), timeout=timeout_s):
@@ -112,5 +112,5 @@ def run_provider_doctor(
     }
 
 
-def format_doctor_report(payload: dict[str, Any]) -> str:
+def format_doctor_report(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)

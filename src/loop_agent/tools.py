@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Dict, List, Union
 
 from .agent_protocol import ToolCall, ToolResult
 
@@ -18,7 +18,7 @@ class ToolContext:
     workspace_root: Path
 
 
-ToolFn = Callable[[ToolContext, dict[str, object]], ToolResult]
+ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
 
 
 def _resolve_inside_workspace(workspace_root: Path, relative_path: str) -> Path:
@@ -29,7 +29,7 @@ def _resolve_inside_workspace(workspace_root: Path, relative_path: str) -> Path:
     return target
 
 
-def read_file_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def read_file_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     path = str(args.get('path', ''))
     call_id = str(args.get('id', 'read_file'))
     try:
@@ -40,7 +40,7 @@ def read_file_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def write_file_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def write_file_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     path = str(args.get('path', ''))
     content = str(args.get('content', ''))
     call_id = str(args.get('id', 'write_file'))
@@ -53,10 +53,10 @@ def write_file_tool(context: ToolContext, args: dict[str, object]) -> ToolResult
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def _split_patch_sections(patch_text: str) -> list[list[str]]:
+def _split_patch_sections(patch_text: str) -> List[List[str]]:
     lines = patch_text.replace('\r\n', '\n').split('\n')
-    sections: list[list[str]] = []
-    current: list[str] = []
+    sections: List[List[str]] = []
+    current: List[str] = []
     for line in lines:
         if line.startswith('*** ') and current:
             sections.append(current)
@@ -75,7 +75,7 @@ def _resolve_patch_target(context: ToolContext, header: str) -> Path:
     return _resolve_inside_workspace(context.workspace_root, raw)
 
 
-def _apply_update_hunks(origin: str, body_lines: list[str]) -> str:
+def _apply_update_hunks(origin: str, body_lines: List[str]) -> str:
     source_lines = origin.split('\n')
     cursor = 0
     index = 0
@@ -86,8 +86,8 @@ def _apply_update_hunks(origin: str, body_lines: list[str]) -> str:
             index += 1
             continue
         index += 1
-        old_chunk: list[str] = []
-        new_chunk: list[str] = []
+        old_chunk: List[str] = []
+        new_chunk: List[str] = []
         while index < len(body_lines):
             current = body_lines[index]
             if current.startswith('@@'):
@@ -128,7 +128,7 @@ def _apply_update_hunks(origin: str, body_lines: list[str]) -> str:
     return '\n'.join(source_lines)
 
 
-def apply_patch_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def apply_patch_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     patch_text = str(args.get('patch', ''))
     call_id = str(args.get('id', 'apply_patch'))
     if not patch_text.strip():
@@ -144,7 +144,7 @@ def apply_patch_tool(context: ToolContext, args: dict[str, object]) -> ToolResul
             raise ValueError('patch body is empty')
 
         sections = _split_patch_sections(content)
-        changed: list[str] = []
+        changed: List[str] = []
         for section in sections:
             header = section[0]
             body = section[1:]
@@ -184,14 +184,14 @@ def apply_patch_tool(context: ToolContext, args: dict[str, object]) -> ToolResul
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     pattern = str(args.get('pattern', '')).strip()
     call_id = str(args.get('id', 'search'))
     if not pattern:
         return ToolResult(id=call_id, ok=False, output='', error='pattern is required')
 
     try:
-        results: list[str] = []
+        results: List[str] = []
         for path in context.workspace_root.rglob('*'):
             if not path.is_file():
                 continue
@@ -207,7 +207,7 @@ def search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def run_command_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def run_command_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Run a command in the workspace. 
     
     For security, prefer using 'cmd' (list) over 'command' (string with shell=True).
@@ -261,7 +261,7 @@ def run_command_tool(context: ToolContext, args: dict[str, object]) -> ToolResul
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def web_search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def web_search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Search the web using DuckDuckGo HTML search (no API key required)."""
     query = str(args.get('query', '')).strip()
     call_id = str(args.get('id', 'web_search'))
@@ -282,7 +282,7 @@ def web_search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult
             html = response.read().decode('utf-8', errors='replace')
         
         # Parse results from HTML
-        results: list[str] = []
+        results: List[str] = []
         import re
         # Match result blocks
         pattern = r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.+?)</a>.*?<a class="result__snippet"[^>]*>(.+?)</a>'
@@ -303,7 +303,7 @@ def web_search_tool(context: ToolContext, args: dict[str, object]) -> ToolResult
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def fetch_url_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Fetch content from a specific URL."""
     url = str(args.get('url', '')).strip()
     call_id = str(args.get('id', 'fetch_url'))
@@ -322,8 +322,8 @@ def fetch_url_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
         # Simple HTML to text conversion - remove scripts, styles, and tags
         import re
         # Remove script and style elements
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=Union[re.DOTALL, re.IGNORECASE])
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=Union[re.DOTALL, re.IGNORECASE])
         # Remove all HTML tags
         text = re.sub(r'<[^>]+>', '', text)
         # Clean up whitespace
@@ -340,7 +340,7 @@ def fetch_url_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def analyze_memory_tool(context: ToolContext, args: dict[str, object]) -> ToolResult:
+def analyze_memory_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Analyze past runs from memory store to learn patterns and insights.
     
     Args:
@@ -365,7 +365,7 @@ def analyze_memory_tool(context: ToolContext, args: dict[str, object]) -> ToolRe
         if not run_dirs:
             return ToolResult(id=call_id, ok=True, output='No past runs found in memory', error=None)
         
-        analysis: list[str] = []
+        analysis: List[str] = []
         total_runs = 0
         completed_runs = 0
         failed_runs = 0
@@ -419,7 +419,7 @@ def analyze_memory_tool(context: ToolContext, args: dict[str, object]) -> ToolRe
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def build_default_tools() -> dict[str, ToolFn]:
+def build_default_tools() -> Dict[str, ToolFn]:
     return {
         'read_file': read_file_tool,
         'write_file': write_file_tool,
@@ -432,7 +432,7 @@ def build_default_tools() -> dict[str, ToolFn]:
     }
 
 
-def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: dict[str, ToolFn]) -> ToolResult:
+def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: Dict[str, ToolFn]) -> ToolResult:
     tool = tools.get(tool_call.name)
     if tool is None:
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')

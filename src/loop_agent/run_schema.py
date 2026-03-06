@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Run artifact and event schema helpers.
 
 This module defines a small, stable schema for run artifacts so that:
@@ -11,7 +9,7 @@ The schema is intentionally stdlib-only.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any, Dict, Final, Optional
 
 SCHEMA_VERSION: Final[str] = "run-schema-v1"
 
@@ -25,10 +23,10 @@ class EventRow:
     schema_version: str
     ts: str
     event: str
-    step: int | None
-    payload: dict[str, Any]
+    step: Optional[int]
+    payload: Dict[str, Any]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "ts": self.ts,

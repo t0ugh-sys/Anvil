@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from ..run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 from .base import MemoryContext
 
 
-def _default_summary() -> dict[str, Any]:
+def _default_summary() -> Dict[str, Any]:
     return {
         'schema_version': SCHEMA_VERSION,
         'goal': '',
@@ -50,7 +50,7 @@ class JsonlMemoryStore:
         if not self._summary_file.exists():
             self._write_summary(_default_summary())
 
-    def on_event(self, event: str, payload: dict[str, Any]) -> None:
+    def on_event(self, event: str, payload: Dict[str, Any]) -> None:
         step = payload.get('step')
         step_index = step if isinstance(step, int) else None
         row = EventRow(
@@ -75,7 +75,7 @@ class JsonlMemoryStore:
         last_steps = self._read_last_steps(last_k_steps)
         return MemoryContext(state_summary=state, last_steps=tuple(last_steps))
 
-    def append_event(self, event: str, payload: dict[str, Any]) -> None:
+    def append_event(self, event: str, payload: Dict[str, Any]) -> None:
         self.on_event(event, payload)
 
     def get_context(self, *, last_k_steps: int) -> MemoryContext:
@@ -87,8 +87,8 @@ class JsonlMemoryStore:
         with self._events_file.open('r', encoding='utf-8') as file:
             return sum(1 for _ in file)
 
-    def _read_state(self) -> dict[str, Any]:
-        default_state: dict[str, Any] = {
+    def _read_state(self) -> Dict[str, Any]:
+        default_state: Dict[str, Any] = {
             'schema_version': SCHEMA_VERSION,
             'goal': '',
             'step_index': 0,
@@ -105,10 +105,10 @@ class JsonlMemoryStore:
         except json.JSONDecodeError:
             return default_state
 
-    def _write_state(self, state: dict[str, Any]) -> None:
+    def _write_state(self, state: Dict[str, Any]) -> None:
         self._state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    def _read_summary(self) -> dict[str, Any]:
+    def _read_summary(self) -> Dict[str, Any]:
         if not self._summary_file.exists():
             return _default_summary()
         try:
@@ -119,13 +119,13 @@ class JsonlMemoryStore:
         except json.JSONDecodeError:
             return _default_summary()
 
-    def _write_summary(self, state: dict[str, Any]) -> None:
+    def _write_summary(self, state: Dict[str, Any]) -> None:
         self._summary_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    def _read_events(self) -> list[dict[str, Any]]:
+    def _read_events(self) -> List[Dict[str, Any]]:
         if not self._events_file.exists():
             return []
-        rows: list[dict[str, Any]] = []
+        rows: List[Dict[str, Any]] = []
         with self._events_file.open('r', encoding='utf-8') as file:
             for line in file:
                 text = line.strip()
@@ -137,11 +137,11 @@ class JsonlMemoryStore:
                     continue
         return rows
 
-    def _read_last_steps(self, last_k_steps: int) -> list[str]:
+    def _read_last_steps(self, last_k_steps: int) -> List[str]:
         if last_k_steps <= 0:
             return []
         rows = self._read_events()
-        steps: list[str] = []
+        steps: List[str] = []
         for row in rows:
             if row.get('event') == 'step_succeeded':
                 payload = row.get('payload', {})
@@ -208,7 +208,7 @@ class JsonlMemoryStore:
     def summarize_now(self) -> None:
         self._summarize()
 
-    def _update_state(self, event: str, payload: dict[str, Any]) -> None:
+    def _update_state(self, event: str, payload: Dict[str, Any]) -> None:
         state = self._read_state()
         goal = payload.get('goal')
         if event == 'run_started' and isinstance(goal, str):

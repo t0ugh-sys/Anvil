@@ -16,26 +16,25 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional, Union
 
 import yaml
 
 
-def load_yaml_config(path: str | Path) -> dict[str, Any]:
+def load_yaml_config(path: Union[str, Path]) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f) or {}
 
 
-def load_json_config(path: str | Path) -> dict[str, Any]:
+def load_json_config(path: Union[str, Path]) -> Dict[str, Any]:
     """Load configuration from JSON file."""
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-def load_env_config(path: str | Path) -> dict[str, Any]:
+def load_env_config(path: Union[str, Path]) -> Dict[str, Any]:
     """Load configuration from .env file."""
     config = {}
     with open(path, 'r', encoding='utf-8') as f:
@@ -70,7 +69,7 @@ DEFAULT_CONFIG_LOCATIONS = [
 ]
 
 
-def find_default_config() -> Path | None:
+def find_default_config() -> Optional[Path ]:
     """Find default config file."""
     for loc in DEFAULT_CONFIG_LOCATIONS:
         path = Path(loc)
@@ -83,7 +82,7 @@ def find_default_config() -> Path | None:
     return None
 
 
-def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
+def load_config(config_path: Union[str, Optional[Path] ] = None) -> Dict[str, Any]:
     """Load configuration from file or find default."""
     if config_path:
         path = Path(config_path)
@@ -105,7 +104,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         raise ValueError(f'Unsupported config format: {suffix}')
 
 
-def merge_config(args_config: dict[str, Any], config_file: dict[str, Any]) -> dict[str, Any]:
+def merge_config(args_config: Dict[str, Any], config_file: Dict[str, Any]) -> Dict[str, Any]:
     """Merge CLI args with config file. CLI args take precedence."""
     merged = config_file.copy()
     merged.update(args_config)

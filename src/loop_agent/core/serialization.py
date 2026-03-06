@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Dict
 
 from .types import RunResult
 
 
-def run_result_to_dict(result: RunResult[Any], *, include_history: bool = True) -> dict[str, Any]:
-    payload: dict[str, Any] = asdict(result)
+def run_result_to_dict(result: RunResult[Any], *, include_history: bool = True) -> Dict[str, Any]:
+    payload: Dict[str, Any] = asdict(result)
     payload['stop_reason'] = result.stop_reason.value
     if not include_history:
         payload.pop('history', None)

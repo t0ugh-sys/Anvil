@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
 class ToolCall:
     id: str
     name: str
-    arguments: dict[str, Any]
+    arguments: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -17,22 +17,22 @@ class ToolResult:
     id: str
     ok: bool
     output: str
-    error: str | None = None
+    error: Optional[str ] = None
 
 
 @dataclass(frozen=True)
 class AgentStep:
     thought: str
-    plan: list[str] = field(default_factory=list)
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    final: str | None = None
+    plan: List[str] = field(default_factory=list)
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    final: Optional[str ] = None
 
     @property
     def done(self) -> bool:
         return self.final is not None
 
 
-def parse_agent_step(raw: str) -> AgentStep | None:
+def parse_agent_step(raw: str) -> Optional[AgentStep ]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -56,7 +56,7 @@ def parse_agent_step(raw: str) -> AgentStep | None:
     tool_calls_raw = payload.get('tool_calls', [])
     if not isinstance(tool_calls_raw, list):
         return None
-    tool_calls: list[ToolCall] = []
+    tool_calls: List[ToolCall] = []
     for item in tool_calls_raw:
         if not isinstance(item, dict):
             return None

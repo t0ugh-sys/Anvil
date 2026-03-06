@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Tuple
 
 from ..core.types import StepContext, StepFn, StepResult
 from ..protocols.json_decision import parse_json_decision
@@ -14,7 +14,7 @@ class JsonLoopState:
     last_answer: str = ''
 
 
-def build_json_loop_prompt(*, goal: str, history: tuple[str, ...], history_window: int) -> str:
+def build_json_loop_prompt(*, goal: str, history: Tuple[str, ...], history_window: int) -> str:
     recent_history = list(history[-history_window:]) if history_window > 0 else []
     return f"""
 你是一个会持续迭代的助手。你的任务是不断改进答案，直到满足用户目标。
