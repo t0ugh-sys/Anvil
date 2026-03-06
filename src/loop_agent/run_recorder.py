@@ -19,7 +19,7 @@ class RunRecorder:
     events_file: Path
 
     @classmethod
-    def create(cls, base_dir: Optional[Path ] = None) -> 'RunRecorder':
+    def create(cls, base_dir: Optional[Path] = None) -> 'RunRecorder':
         # Keep consistent with CLI defaults: `.loopagent/runs`
         root = (base_dir or Path('.loopagent/runs')).resolve()
         run_dir = root / _utc_timestamp()
