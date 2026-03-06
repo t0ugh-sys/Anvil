@@ -202,7 +202,7 @@ def run(argv: Optional[list[str]] = None) -> int:
             existing = str(log.renderable)
             log.update(existing + reply + '\n')
 
-    ChatApp(title='LoopAgent Chat').run()
+    ChatApp().run()
     return 0
 
 
