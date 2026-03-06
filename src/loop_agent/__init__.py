@@ -3,6 +3,14 @@ from .core.serialization import run_result_to_dict, run_result_to_json
 from .core.stop import StopConfig, StopReason
 from .memory import JsonlMemoryStore, MemoryContext, MemoryStore
 
+# New modules
+from . import skills
+from . import config
+from . import logging as log
+from . import prompts
+from . import errors
+from . import api
+
 __all__ = [
     'LoopAgent',
     'RunResult',
@@ -15,4 +23,11 @@ __all__ = [
     'MemoryStore',
     'MemoryContext',
     'JsonlMemoryStore',
+    # New exports
+    'skills',
+    'config',
+    'log',
+    'prompts',
+    'errors',
+    'api',
 ]

@@ -396,3 +396,29 @@ def parse_provider_headers(items: List[str]) -> Dict[str, str]:
             raise ValueError('provider header key must not be empty')
         headers[key] = value
     return headers
+
+
+# Provider registry for programmatic access
+_PROVIDER_REGISTRY = {
+    'mock': 'Mock provider for testing',
+    'openai_compatible': 'OpenAI-compatible API (OpenAI, Ollama, etc.)',
+    'anthropic': 'Anthropic Claude API',
+    'gemini': 'Google Gemini API',
+}
+
+
+def list_providers() -> dict[str, str]:
+    """List all available providers and their descriptions."""
+    return _PROVIDER_REGISTRY.copy()
+
+
+def get_provider(name: str) -> InvokeFn | None:
+    """Get a provider invoke function by name.
+    
+    Returns None if provider requires configuration (api_key, base_url, etc.)
+    """
+    if name == 'mock':
+        return _mock_invoke_factory('mock-model', mode='json')
+    # Other providers require configuration, return None
+    # Use build_invoke_from_args for full configuration
+    return None

@@ -16,6 +16,7 @@ from .doctor import format_doctor_report, run_provider_doctor
 from .llm.providers import build_invoke_from_args
 from .memory.jsonl_store import JsonlMemoryStore
 from .run_recorder import RunRecorder
+from .skills import SkillLoader, list_skills, get_skill
 from .tools import build_default_tools
 
 
@@ -58,6 +59,24 @@ def _build_coding_decider(args: argparse.Namespace):
         return invoke(prompt)
 
     return decider
+
+
+def _load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
+    """Load skills from command-line arguments."""
+    skills_arg = getattr(args, 'skills', None)
+    if not skills_arg:
+        return None
+    
+    loader = SkillLoader()
+    for skill_name in skills_arg:
+        if skill_name == 'all':
+            # Load all built-in skills
+            for name in list_skills():
+                loader.load(name)
+        else:
+            if not loader.load(skill_name):
+                print(f"Warning: Unknown skill '{skill_name}' - skipping")
+    return loader
 
 
 def _build_jsonl_observer(path: str) -> ObserverFn:
@@ -105,6 +124,7 @@ def _run_code_command(args: argparse.Namespace) -> int:
         return ContextSnapshot(state_summary=context.state_summary, last_steps=context.last_steps)
 
     decider = _build_coding_decider(args)
+    skills = _load_skills_from_args(args)
     result = run_coding_agent(
         goal=goal,
         decider=decider,
@@ -112,6 +132,7 @@ def _run_code_command(args: argparse.Namespace) -> int:
         stop=StopConfig(max_steps=args.max_steps, max_elapsed_s=args.timeout_s),
         observer=observer,
         context_provider=context_provider,
+        skills=skills,
     )
     memory_store.on_event(
         'run_finished',
@@ -147,6 +168,19 @@ def _run_code_command(args: argparse.Namespace) -> int:
 def _run_tools_command(_: argparse.Namespace) -> int:
     names = sorted(build_default_tools().keys())
     print('\n'.join(names))
+    return 0
+
+
+def _run_skills_command(_: argparse.Namespace) -> int:
+    """List all available skills."""
+    skills = list_skills()
+    print("Available skills:")
+    for name in skills:
+        skill = get_skill(name)
+        if skill:
+            print(f"  - {name}: {skill.description}")
+    print("\nUse --skill <name> to load specific skills")
+    print("Use --skill all to load all skills")
     return 0
 
 
@@ -215,9 +249,19 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument('--runs-dir', default='.loopagent/runs')
     code.add_argument('--include-history', action='store_true')
     code.add_argument('--output', choices=['text', 'json'], default='text')
+    code.add_argument(
+        '--skill',
+        action='append',
+        default=[],
+        dest='skills',
+        help='Skills to load (web_search, memory, files, commands, browser, or "all")',
+    )
 
     tools = subparsers.add_parser('tools', help='list available tools')
     tools.set_defaults(handler=_run_tools_command)
+
+    skills_parser = subparsers.add_parser('skills', help='list available skills')
+    skills_parser.set_defaults(handler=_run_skills_command)
 
     replay = subparsers.add_parser('replay', help='print events jsonl')
     replay.add_argument('--events-file', required=True)
