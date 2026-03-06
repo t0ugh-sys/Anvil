@@ -25,6 +25,7 @@ dependencies = []
 browser = ["playwright"]
 all = ["playwright"]
 dev = ["pytest", "pytest-cov"]
+tui = ["textual>=0.86.2"]
 
 [project.scripts]
 loopagent = "loop_agent.cli:main"
@@ -33,11 +34,6 @@ loopagent = "loop_agent.cli:main"
 Homepage = "https://github.com/t0ugh-sys/LoopAgent"
 Repository = "https://github.com/t0ugh-sys/LoopAgent"
 Issues = "https://github.com/t0ugh-sys/LoopAgent/issues"
-
-[project.optional-dependencies]
-tui = [
-  "textual>=0.86.2",
-]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
