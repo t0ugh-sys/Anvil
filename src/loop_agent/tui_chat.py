@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 
 def _utc_run_id() -> str:
@@ -25,6 +25,24 @@ class ChatConfig:
 
 
 PROVIDERS = ['openai_compatible', 'anthropic', 'gemini']
+
+PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
+    'openai_compatible': {
+        'model': 'gpt-4o-mini',
+        'base_url': 'https://api.openai.com/v1',
+        'api_key_env': 'OPENAI_API_KEY',
+    },
+    'anthropic': {
+        'model': 'claude-3-5-sonnet-latest',
+        'base_url': '',
+        'api_key_env': 'ANTHROPIC_API_KEY',
+    },
+    'gemini': {
+        'model': 'gemini-1.5-flash',
+        'base_url': '',
+        'api_key_env': 'GEMINI_API_KEY',
+    },
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,25 +146,7 @@ def run(argv: Optional[list[str]] = None) -> int:
 
     args = build_parser().parse_args(argv)
 
-    provider_defaults = {
-        'openai_compatible': {
-            'model': 'gpt-4o-mini',
-            'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY',
-        },
-        'anthropic': {
-            'model': 'claude-3-5-sonnet-latest',
-            'base_url': '',
-            'api_key_env': 'ANTHROPIC_API_KEY',
-        },
-        'gemini': {
-            'model': 'gemini-1.5-flash',
-            'base_url': '',
-            'api_key_env': 'GEMINI_API_KEY',
-        },
-    }
-
-    defaults = provider_defaults.get(args.provider, provider_defaults['openai_compatible'])
+    defaults = PROVIDER_DEFAULTS.get(args.provider, PROVIDER_DEFAULTS['openai_compatible'])
 
     chat_id = args.chat_id.strip() or _utc_run_id()
     chat_root = Path(args.chat_dir)
@@ -163,6 +163,33 @@ def run(argv: Optional[list[str]] = None) -> int:
     )
 
     invoke = _build_chat_invoke(cfg)
+
+    current_cfg = cfg
+    current_invoke = invoke
+
+    def _cfg_banner(c: ChatConfig) -> str:
+        base = c.base_url or '(n/a)'
+        return f'Provider: {c.provider} | Model: {c.model} | Base URL: {base} | API key env: {c.api_key_env}'
+
+    def _apply_provider_change(provider: str) -> Tuple[ChatConfig, Any, str]:
+        provider = provider.strip()
+        if provider not in PROVIDERS:
+            raise ValueError(f'unknown provider: {provider}')
+
+        defaults = PROVIDER_DEFAULTS[provider]
+
+        new_cfg = ChatConfig(
+            provider=provider,
+            model=defaults['model'],
+            base_url=defaults['base_url'],
+            api_key_env=defaults['api_key_env'],
+            temperature=current_cfg.temperature,
+            provider_timeout_s=current_cfg.provider_timeout_s,
+            history_limit=current_cfg.history_limit,
+        )
+
+        new_invoke = _build_chat_invoke(new_cfg)
+        return new_cfg, new_invoke, _cfg_banner(new_cfg)
 
     messages_path = chat_dir / 'messages.jsonl'
 
@@ -216,8 +243,9 @@ def run(argv: Optional[list[str]] = None) -> int:
         def on_mount(self) -> None:
             log = self.query_one('#log', Static)
             log.update(
-                f'Chat: {chat_id}\nProvider: {cfg.provider}\nModel: {cfg.model}\nBase URL: {cfg.base_url}\n'
+                f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
                 f'Logs: {chat_dir}\n'
+                "Commands: /provider <openai_compatible|anthropic|gemini>, /reset, /exit\n"
             )
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -236,9 +264,35 @@ def run(argv: Optional[list[str]] = None) -> int:
                     messages_path.unlink()
                 log = self.query_one('#log', Static)
                 log.update(
-                    f'Chat: {chat_id}\nProvider: {cfg.provider}\nModel: {cfg.model}\nBase URL: {cfg.base_url}\n'
+                    f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
                     f'Logs: {chat_dir}\n(reset: messages.jsonl cleared; backup: messages.bak)\n'
+                    "Commands: /provider <openai_compatible|anthropic|gemini>, /reset, /exit\n"
                 )
+                return
+
+            if text.startswith('/provider'):
+                parts = text.split(maxsplit=1)
+                if len(parts) != 2:
+                    log = self.query_one('#log', Static)
+                    existing = str(log.renderable)
+                    log.update(existing + 'Usage: /provider <openai_compatible|anthropic|gemini>\n')
+                    return
+
+                try:
+                    new_cfg, new_invoke, banner = _apply_provider_change(parts[1])
+                except Exception as e:
+                    log = self.query_one('#log', Static)
+                    existing = str(log.renderable)
+                    log.update(existing + f'ERROR: {e}\n')
+                    return
+
+                nonlocal current_cfg, current_invoke
+                current_cfg = new_cfg
+                current_invoke = new_invoke
+
+                log = self.query_one('#log', Static)
+                existing = str(log.renderable)
+                log.update(existing + f'\n[{banner}]\n')
                 return
 
             log = self.query_one('#log', Static)
@@ -248,8 +302,8 @@ def run(argv: Optional[list[str]] = None) -> int:
             _append_jsonl(messages_path, {'role': 'user', 'text': text, 'ts': datetime.now(timezone.utc).isoformat()})
 
             try:
-                messages = load_messages(cfg.history_limit)
-                reply = invoke(messages)
+                messages = load_messages(current_cfg.history_limit)
+                reply = current_invoke(messages)
             except Exception as e:
                 reply = f'ERROR: {e}'
 
