@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
 from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 
@@ -19,7 +19,7 @@ class RunRecorder:
     events_file: Path
 
     @classmethod
-    def create(cls, base_dir: Path | None = None) -> 'RunRecorder':
+    def create(cls, base_dir: Optional[Path ] = None) -> 'RunRecorder':
         # Keep consistent with CLI defaults: `.loopagent/runs`
         root = (base_dir or Path('.loopagent/runs')).resolve()
         run_dir = root / _utc_timestamp()
@@ -27,7 +27,7 @@ class RunRecorder:
         events_file = run_dir / 'events.jsonl'
         return cls(run_dir=run_dir, events_file=events_file)
 
-    def write_event(self, event: str, payload: dict[str, Any]) -> None:
+    def write_event(self, event: str, payload: Dict[str, Any]) -> None:
         # Stable event envelope for replay/debugging.
         step = payload.get('step')
         step_index = step if isinstance(step, int) else None
@@ -42,6 +42,6 @@ class RunRecorder:
             file.write(json.dumps(row.to_dict(), ensure_ascii=False))
             file.write('\n')
 
-    def write_summary(self, payload: dict[str, Any]) -> None:
+    def write_summary(self, payload: Dict[str, Any]) -> None:
         summary_file = self.run_dir / 'summary.json'
         summary_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')

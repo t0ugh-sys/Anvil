@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Dict, List
 
 import time
 import unittest
@@ -94,9 +95,9 @@ class LoopAgentTests(unittest.TestCase):
         def step(context: StepContext[_State]) -> StepResult[_State]:
             return StepResult(output='ok', state=context.state, done=True)
 
-        events: list[str] = []
+        events: List[str] = []
 
-        def observer(event: str, payload: dict[str, object]) -> None:
+        def observer(event: str, payload: Dict[str, object]) -> None:
             events.append(event)
             self.assertIsInstance(payload, dict)
 
@@ -107,7 +108,7 @@ class LoopAgentTests(unittest.TestCase):
         self.assertEqual(events, ['step_started', 'step_succeeded', 'stopped'])
 
     def test_should_inject_context_snapshot(self) -> None:
-        captured: dict[str, object] = {}
+        captured: Dict[str, object] = {}
 
         def step(context: StepContext[_State]) -> StepResult[_State]:
             captured['summary'] = context.state_summary

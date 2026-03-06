@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Tuple
 
 from ..core.types import StepFn
 from ..llm.providers import build_invoke_from_args
 from .demo import DemoState, demo_step
 from .json_loop import JsonLoopState, make_json_decision_step
 
-StepBundle = tuple[StepFn[Any], Any]
+StepBundle = Tuple[StepFn[Any], Any]
 StepBuilder = Callable[[argparse.Namespace], StepBundle]
 
 
 @dataclass
 class StepRegistry:
-    _builders: dict[str, StepBuilder]
+    _builders: Dict[str, StepBuilder]
 
     def register(self, name: str, builder: StepBuilder) -> None:
         if not name.strip():
@@ -28,7 +28,7 @@ class StepRegistry:
             raise ValueError(f'unknown strategy: {name}')
         return builder(args)
 
-    def names(self) -> list[str]:
+    def names(self) -> List[str]:
         return sorted(self._builders.keys())
 
 

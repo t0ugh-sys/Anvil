@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
 class JsonDecision:
     answer: str
     done: bool
-    raw: dict[str, Any]
+    raw: Dict[str, Any]
 
 
-def parse_json_decision(text: str) -> JsonDecision | None:
+def parse_json_decision(text: str) -> Optional[JsonDecision ]:
     candidate = text.strip()
     if candidate.startswith('```'):
         lines = [line for line in candidate.splitlines() if line.strip()]

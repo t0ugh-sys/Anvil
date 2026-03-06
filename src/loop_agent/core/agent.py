@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Dict, Generic, List, Optional, TypeVar
 
 from .types import (
     CancelFn,
@@ -30,15 +30,15 @@ class LoopAgent(Generic[StateT]):
         *,
         goal: str,
         initial_state: StateT,
-        is_cancelled: CancelFn | None = None,
-        observer: ObserverFn | None = None,
-        context_provider: ContextProviderFn | None = None,
+        is_cancelled: Optional[CancelFn ] = None,
+        observer: Optional[ObserverFn ] = None,
+        context_provider: Optional[ContextProviderFn ] = None,
     ) -> RunResult[StateT]:
         self.stop.validate()
         if not goal.strip():
             raise ValueError('goal must not be empty')
 
-        def emit(event: str, payload: dict[str, object]) -> None:
+        def emit(event: str, payload: Dict[str, object]) -> None:
             if observer is None:
                 return
             try:
@@ -48,7 +48,7 @@ class LoopAgent(Generic[StateT]):
 
         started_at_s = monotonic_s()
         state = initial_state
-        history: list[str] = []
+        history: List[str] = []
         last_output = ''
 
         for step_index in range(self.stop.max_steps):
