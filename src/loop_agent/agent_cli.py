@@ -70,7 +70,7 @@ def _build_jsonl_observer(path: str) -> ObserverFn:
     return observer
 
 
-def _merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn ]:
+def _merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn]:
     active = [item for item in observers if item is not None]
     if not active:
         return None
@@ -90,7 +90,7 @@ def _run_code_command(args: argparse.Namespace) -> int:
     memory_store = JsonlMemoryStore(memory_dir=memory_run_dir, summarize_every=args.summarize_every)
     memory_store.on_event('run_started', {'goal': goal, 'strategy': 'coding', 'facts': []})
 
-    recorder: Optional[RunRecorder ] = None
+    recorder: Optional[RunRecorder] = None
     observers: List[ObserverFn] = []
     if args.observer_file:
         observers.append(_build_jsonl_observer(args.observer_file))
@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     code.add_argument('--summarize-every', type=int, default=5)
     code.add_argument('--record-run', action='store_true', default=True)
     code.add_argument('--no-record-run', action='store_false', dest='record_run')
-    code.add_argument('--runs-dir', default='runs')
+    code.add_argument('--runs-dir', default='.loopagent/runs')
     code.add_argument('--include-history', action='store_true')
     code.add_argument('--output', choices=['text', 'json'], default='text')
 
