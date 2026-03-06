@@ -142,7 +142,8 @@ def run(argv: Optional[list[str]] = None) -> int:
 
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
-    from textual.widgets import Footer, Header, Input, Static
+    from textual.screen import ModalScreen
+    from textual.widgets import Footer, Header, Input, Static, OptionList
 
     args = build_parser().parse_args(argv)
 
@@ -210,6 +211,43 @@ def run(argv: Optional[list[str]] = None) -> int:
                 out.append({'role': role, 'content': text})
         return out[-limit:] if limit > 0 else out
 
+    def _model_candidates(provider: str) -> list[str]:
+        if provider == 'openai_compatible':
+            return [
+                'gpt-4o-mini',
+                'gpt-4o',
+                'gpt-4.1-mini',
+                'gpt-4.1',
+                'o3-mini',
+            ]
+        if provider == 'anthropic':
+            return [
+                'claude-3-5-sonnet-latest',
+                'claude-3-5-haiku-latest',
+            ]
+        if provider == 'gemini':
+            return [
+                'gemini-1.5-flash',
+                'gemini-1.5-pro',
+            ]
+        return []
+
+    class ModelPickerScreen(ModalScreen[Optional[str]]):
+        def compose(self) -> ComposeResult:
+            with Vertical(id='panel'):
+                yield Static(f'Pick a model ({current_cfg.provider})', id='title')
+                yield OptionList(*_model_candidates(current_cfg.provider), id='options')
+                yield Static('Enter: select | Esc: cancel', id='hint')
+
+        def on_mount(self) -> None:
+            self.query_one('#options', OptionList).focus()
+
+        def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+            self.dismiss(str(event.option.prompt))
+
+        def key_escape(self) -> None:
+            self.dismiss(None)
+
     class ChatApp(App):
         CSS = """
         Screen {
@@ -224,10 +262,32 @@ def run(argv: Optional[list[str]] = None) -> int:
         #input {
             border: round $surface;
         }
+
+        ModelPickerScreen {
+            align: center middle;
+        }
+        ModelPickerScreen > #panel {
+            width: 80%;
+            max-width: 100;
+            height: auto;
+            max-height: 80%;
+            border: round $surface;
+            background: $panel;
+            padding: 1;
+        }
+        ModelPickerScreen #title {
+            padding: 0 0 1 0;
+        }
+        ModelPickerScreen #options {
+            height: auto;
+            max-height: 20;
+            border: round $surface;
+        }
         """
 
         BINDINGS = [
             ('ctrl+c', 'quit', 'Quit'),
+            ('ctrl+m', 'pick_model', 'Model'),
         ]
 
         def compose(self) -> ComposeResult:
@@ -237,6 +297,43 @@ def run(argv: Optional[list[str]] = None) -> int:
                 yield Input(placeholder='Say something... (/exit to quit)', id='input')
             yield Footer()
 
+        def action_pick_model(self) -> None:
+            self._open_model_picker()
+
+        def _open_model_picker(self) -> None:
+            self.push_screen(ModelPickerScreen(), self._on_model_picked)
+
+        def _on_model_picked(self, value: Optional[str]) -> None:
+            if not value:
+                return
+
+            nonlocal current_cfg, current_invoke
+
+            new_cfg = ChatConfig(
+                provider=current_cfg.provider,
+                model=value,
+                base_url=current_cfg.base_url,
+                api_key_env=current_cfg.api_key_env,
+                temperature=current_cfg.temperature,
+                provider_timeout_s=current_cfg.provider_timeout_s,
+                history_limit=current_cfg.history_limit,
+            )
+
+            try:
+                new_invoke = _build_chat_invoke(new_cfg)
+            except Exception as e:
+                log = self.query_one('#log', Static)
+                existing = str(log.renderable)
+                log.update(existing + f'ERROR: {e}\n')
+                return
+
+            current_cfg = new_cfg
+            current_invoke = new_invoke
+
+            log = self.query_one('#log', Static)
+            existing = str(log.renderable)
+            log.update(existing + f'\n[{_cfg_banner(current_cfg)}]\n')
+
         def on_ready(self) -> None:
             self.query_one('#input', Input).focus()
 
@@ -245,7 +342,7 @@ def run(argv: Optional[list[str]] = None) -> int:
             log.update(
                 f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
                 f'Logs: {chat_dir}\n'
-                "Commands: /provider <openai_compatible|anthropic|gemini>, /reset, /exit\n"
+                "Commands: /provider <openai_compatible|anthropic|gemini>, /model (or Ctrl+M), /reset, /exit\n"
             )
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -266,8 +363,12 @@ def run(argv: Optional[list[str]] = None) -> int:
                 log.update(
                     f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
                     f'Logs: {chat_dir}\n(reset: messages.jsonl cleared; backup: messages.bak)\n'
-                    "Commands: /provider <openai_compatible|anthropic|gemini>, /reset, /exit\n"
+                    "Commands: /provider <openai_compatible|anthropic|gemini>, /model (or Ctrl+M), /reset, /exit\n"
                 )
+                return
+
+            if text == '/model':
+                self._open_model_picker()
                 return
 
             if text.startswith('/provider'):
