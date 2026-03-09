@@ -346,6 +346,8 @@ def run(argv: Optional[list[str]] = None) -> int:
             )
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
+            nonlocal current_cfg, current_invoke
+
             text = event.value.strip()
             event.input.value = ''
             if not text:
@@ -387,7 +389,6 @@ def run(argv: Optional[list[str]] = None) -> int:
                     log.update(existing + f'ERROR: {e}\n')
                     return
 
-                nonlocal current_cfg, current_invoke
                 current_cfg = new_cfg
                 current_invoke = new_invoke
 
