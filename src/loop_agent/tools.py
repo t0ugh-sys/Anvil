@@ -420,6 +420,32 @@ def analyze_memory_tool(context: ToolContext, args: Dict[str, object]) -> ToolRe
 
 
 def build_default_tools() -> Dict[str, ToolFn]:
+    # Keep tool names stable; they become part of the agent's contract.
+    from .git_tools import (
+        git_branch_list_tool,
+        git_checkout_tool,
+        git_merge_and_push_tool,
+        git_merge_tool,
+        git_pull_tool,
+        git_push_tool,
+        git_status_tool,
+    )
+    from .github_tools import (
+        gh_auth_status_tool,
+        gh_issue_close_tool,
+        gh_issue_create_tool,
+        gh_issue_list_tool,
+        gh_pr_checks_tool,
+        gh_pr_comment_tool,
+        gh_pr_create_tool,
+        gh_pr_list_tool,
+        gh_pr_merge_tool,
+        gh_pr_view_tool,
+        gh_repo_clone_tool,
+        gh_repo_create_tool,
+        gh_repo_list_tool,
+    )
+
     return {
         'read_file': read_file_tool,
         'write_file': write_file_tool,
@@ -429,6 +455,28 @@ def build_default_tools() -> Dict[str, ToolFn]:
         'web_search': web_search_tool,
         'fetch_url': fetch_url_tool,
         'analyze_memory': analyze_memory_tool,
+        # Git
+        'git_status': git_status_tool,
+        'git_branch_list': git_branch_list_tool,
+        'git_checkout': git_checkout_tool,
+        'git_pull': git_pull_tool,
+        'git_merge': git_merge_tool,
+        'git_merge_and_push': git_merge_and_push_tool,
+        'git_push': git_push_tool,
+        # GitHub (via gh CLI)
+        'gh_auth_status': gh_auth_status_tool,
+        'gh_repo_list': gh_repo_list_tool,
+        'gh_repo_create': gh_repo_create_tool,
+        'gh_repo_clone': gh_repo_clone_tool,
+        'gh_issue_list': gh_issue_list_tool,
+        'gh_issue_create': gh_issue_create_tool,
+        'gh_issue_close': gh_issue_close_tool,
+        'gh_pr_list': gh_pr_list_tool,
+        'gh_pr_create': gh_pr_create_tool,
+        'gh_pr_view': gh_pr_view_tool,
+        'gh_pr_checks': gh_pr_checks_tool,
+        'gh_pr_comment': gh_pr_comment_tool,
+        'gh_pr_merge': gh_pr_merge_tool,
     }
 
 
