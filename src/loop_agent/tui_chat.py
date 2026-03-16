@@ -57,6 +57,22 @@ def _cfg_banner(cfg: ChatConfig) -> str:
     return f'Provider: {label} | Model: {cfg.model} | Base URL: {base} | API key env: {cfg.api_key_env}'
 
 
+def _help_text() -> str:
+    return 'Commands: /status, /provider [name] (or Ctrl+P), /model [name] (or Ctrl+M), /reset, /exit'
+
+
+def _welcome_text(chat_id: str, chat_dir: Path, cfg: ChatConfig, *, reset_note: str = '') -> str:
+    lines = [
+        f'Chat: {chat_id}',
+        _cfg_banner(cfg),
+        f'Logs: {chat_dir}',
+    ]
+    if reset_note:
+        lines.append(reset_note)
+    lines.append(_help_text())
+    return '\n'.join(lines) + '\n'
+
+
 def _provider_candidates() -> list[str]:
     return [f'{provider} - {PROVIDER_LABELS.get(provider, provider)}' for provider in PROVIDERS]
 
@@ -98,6 +114,11 @@ def _build_model_config(current_cfg: ChatConfig, model: str) -> ChatConfig:
         provider_timeout_s=current_cfg.provider_timeout_s,
         history_limit=current_cfg.history_limit,
     )
+
+
+def _apply_model_change(current_cfg: ChatConfig, model: str) -> Tuple[ChatConfig, str]:
+    updated = _build_model_config(current_cfg, model)
+    return updated, _cfg_banner(updated)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -387,7 +408,7 @@ def run(argv: Optional[list[str]] = None) -> int:
             nonlocal current_cfg, current_invoke
 
             try:
-                new_cfg = _build_model_config(current_cfg, value)
+                new_cfg, banner = _apply_model_change(current_cfg, value)
                 new_invoke = _build_chat_invoke(new_cfg)
             except Exception as e:
                 log = self.query_one('#log', Static)
@@ -400,18 +421,14 @@ def run(argv: Optional[list[str]] = None) -> int:
 
             log = self.query_one('#log', Static)
             existing = str(log.renderable)
-            log.update(existing + f'\n[{_cfg_banner(current_cfg)}]\n')
+            log.update(existing + f'\n[{banner}]\n')
 
         def on_ready(self) -> None:
             self.query_one('#input', Input).focus()
 
         def on_mount(self) -> None:
             log = self.query_one('#log', Static)
-            log.update(
-                f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
-                f'Logs: {chat_dir}\n'
-                "Commands: /provider [name] (or Ctrl+P), /model (or Ctrl+M), /reset, /exit\n"
-            )
+            log.update(_welcome_text(chat_id, chat_dir, current_cfg))
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
             nonlocal current_cfg, current_invoke
@@ -431,14 +448,42 @@ def run(argv: Optional[list[str]] = None) -> int:
                     messages_path.unlink()
                 log = self.query_one('#log', Static)
                 log.update(
-                    f'Chat: {chat_id}\n{_cfg_banner(current_cfg)}\n'
-                    f'Logs: {chat_dir}\n(reset: messages.jsonl cleared; backup: messages.bak)\n'
-                    "Commands: /provider [name] (or Ctrl+P), /model (or Ctrl+M), /reset, /exit\n"
+                    _welcome_text(
+                        chat_id,
+                        chat_dir,
+                        current_cfg,
+                        reset_note='(reset: messages.jsonl cleared; backup: messages.bak)',
+                    )
                 )
+                return
+
+            if text == '/status':
+                log = self.query_one('#log', Static)
+                existing = str(log.renderable)
+                log.update(existing + f'\n[{_cfg_banner(current_cfg)}]\n')
                 return
 
             if text == '/model':
                 self._open_model_picker()
+                return
+
+            if text.startswith('/model '):
+                model_name = text.split(maxsplit=1)[1].strip()
+                try:
+                    new_cfg, banner = _apply_model_change(current_cfg, model_name)
+                    new_invoke = _build_chat_invoke(new_cfg)
+                except Exception as e:
+                    log = self.query_one('#log', Static)
+                    existing = str(log.renderable)
+                    log.update(existing + f'ERROR: {e}\n')
+                    return
+
+                current_cfg = new_cfg
+                current_invoke = new_invoke
+
+                log = self.query_one('#log', Static)
+                existing = str(log.renderable)
+                log.update(existing + f'\n[{banner}]\n')
                 return
 
             if text.startswith('/provider'):
