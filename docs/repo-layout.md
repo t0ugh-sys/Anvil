@@ -16,6 +16,9 @@
 - `memory/`: JSONL memory store and summary handling
 - `steps/`: strategy-specific step builders
 - `tools.py`: workspace-safe tool layer
+- `task_graph.py`: dependency-aware task DAG state
+- `mailbox.py`: persistent async message channel
+- `subagents.py`: sub-agent runtime and dispatch helpers
 - `coding_agent.py`: coding-agent orchestration
 - `agent_cli.py`: coding-agent oriented CLI
 - `cli.py`: general loop CLI

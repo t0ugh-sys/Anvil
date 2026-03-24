@@ -10,6 +10,9 @@ from . import logging as log
 from . import prompts
 from . import errors
 from . import api
+from . import task_graph
+from . import mailbox
+from . import subagents
 
 __all__ = [
     'LoopAgent',
@@ -30,4 +33,7 @@ __all__ = [
     'prompts',
     'errors',
     'api',
+    'task_graph',
+    'mailbox',
+    'subagents',
 ]

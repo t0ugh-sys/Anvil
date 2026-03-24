@@ -57,6 +57,7 @@ Start here:
 | S03 | Persistent memory and summaries | `agents/s03_memory.py` |
 | S04 | Skills and capability loading | `agents/s04_skills.py` |
 | S05 | Coding agent and tools | `agents/s05_coding.py` |
+| S06 | Task graph, mailbox, sub-agents | `agents/s06_team.py` |
 | FULL | Combined harness view | `agents/s_full.py` |
 
 ## Main CLI
@@ -94,6 +95,7 @@ python -m loop_agent.agent_cli code --goal "inspect the repository" --workspace 
 - State summary injection with `state_summary` and `last_steps`
 - Swappable providers for mock, OpenAI-compatible, Anthropic, and Gemini flows
 - Built-in skills for files, commands, memory, web search, and optional browser automation
+- First-pass orchestration primitives for task graphs, async mailbox coordination, and sub-agent dispatch
 
 ## Skills
 
