@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List
 
 from .agent_protocol import ToolCall, ToolResult
+from .policies import ToolPolicy
 
 
 @dataclass(frozen=True)
 class ToolContext:
     workspace_root: Path
+    policy: ToolPolicy = ToolPolicy.allow_all()
 
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
@@ -503,6 +505,9 @@ def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: Dict[str
     tool = tools.get(tool_call.name)
     if tool is None:
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')
+    if not context.policy.allows_tool(tool_call.name):
+        denied = ', '.join(item.value for item in context.policy.denied_capabilities_for_tool(tool_call.name))
+        return ToolResult(id=tool_call.id, ok=False, output='', error=f'tool blocked by policy: {tool_call.name} ({denied})')
     args = dict(tool_call.arguments)
     args.setdefault('id', tool_call.id)
     return tool(context, args)

@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .agent_protocol import ToolResult, parse_agent_step, render_agent_step_schema
 from .core.agent import LoopAgent
 from .core.types import ContextProviderFn, ObserverFn, RunResult, StepContext, StepResult, StopConfig
+from .policies import ToolPolicy
 from .tools import ToolContext, build_default_tools, execute_tool_call
 
 # Try to import skills module
@@ -29,6 +30,7 @@ def build_coding_step(
     decider: DeciderFn,
     workspace_root: Path,
     skills: Optional[SkillLoader ] = None,
+    policy: ToolPolicy = ToolPolicy.allow_all(),
 ) -> Callable[[StepContext[CodingAgentState]], StepResult[CodingAgentState]]:
     # Start with default tools
     tools = build_default_tools()
@@ -38,7 +40,7 @@ def build_coding_step(
         skill_tools = skills.get_tools()
         tools.update(skill_tools)
     
-    tool_context = ToolContext(workspace_root=workspace_root)
+    tool_context = ToolContext(workspace_root=workspace_root, policy=policy)
 
     def step(context: StepContext[CodingAgentState]) -> StepResult[CodingAgentState]:
         raw = decider(
@@ -103,8 +105,9 @@ def run_coding_agent(
     observer: Optional[ObserverFn ] = None,
     context_provider: Optional[ContextProviderFn ] = None,
     skills: Optional[SkillLoader ] = None,
+    policy: ToolPolicy = ToolPolicy.allow_all(),
 ) -> RunResult[CodingAgentState]:
-    step = build_coding_step(decider, workspace_root=workspace_root, skills=skills)
+    step = build_coding_step(decider, workspace_root=workspace_root, skills=skills, policy=policy)
     agent = LoopAgent(step=step, stop=stop or StopConfig(max_steps=20, max_elapsed_s=60.0))
     return agent.run(
         goal=goal,
