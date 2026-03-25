@@ -9,10 +9,25 @@ from unittest.mock import patch
 import _bootstrap  # noqa: F401
 
 from loop_agent.agent_protocol import ToolCall
-from loop_agent.tools import ToolContext, build_default_tools, execute_tool_call, fetch_url_tool
+from loop_agent.tools import (
+    ToolContext,
+    build_default_tools,
+    execute_tool_call,
+    fetch_url_tool,
+    register_tool_handler,
+)
 
 
 class ToolsTests(unittest.TestCase):
+    def test_should_register_custom_tool_handler_in_dispatch_map(self) -> None:
+        def echo_tool(context: ToolContext, args):
+            return type('Result', (), {})  # pragma: no cover
+
+        dispatch_map = build_default_tools()
+        updated = register_tool_handler(dispatch_map, 'echo', echo_tool)
+
+        self.assertIs(updated['echo'], echo_tool)
+
     def test_should_apply_patch_update_file(self) -> None:
         tmp_dir = Path('tests/.tmp') / f'tools-{uuid.uuid4().hex}'
         tmp_dir.mkdir(parents=True, exist_ok=True)

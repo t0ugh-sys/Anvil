@@ -66,6 +66,7 @@ def build_coding_step(
         executed: List[ToolResult] = []
         for tool_call in parsed.tool_calls:
             executed.append(execute_tool_call(tool_context, tool_call, tools))
+        has_tool_calls = len(parsed.tool_calls) > 0
 
         history = list(context.state.history)
         history.append(f'thought: {parsed.thought}')
@@ -85,11 +86,12 @@ def build_coding_step(
                 {'id': item.id, 'ok': item.ok, 'error': item.error, 'output': item.output[:2000]}
                 for item in executed
             ],
+            'has_tool_calls': has_tool_calls,
             'state_summary': context.state_summary,
             'last_steps': list(context.last_steps),
         }
-        if parsed.done:
-            final = parsed.final or ''
+        if not has_tool_calls:
+            final = parsed.final or parsed.thought or 'done'
             return StepResult(output=final, state=new_state, done=True, metadata=metadata)
         return StepResult(output='continue', state=new_state, done=False, metadata=metadata)
 

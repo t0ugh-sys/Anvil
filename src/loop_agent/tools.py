@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List, Tuple
 
 from .agent_protocol import ToolCall, ToolResult
 from .policies import ToolPolicy
@@ -22,6 +22,7 @@ class ToolContext:
 
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
+ToolDispatchMap = Dict[str, ToolFn]
 
 
 _SEARCH_SKIP_DIRS = {
@@ -440,8 +441,22 @@ def analyze_memory_tool(context: ToolContext, args: Dict[str, object]) -> ToolRe
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
-def build_default_tools() -> Dict[str, ToolFn]:
+def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: ToolFn) -> ToolDispatchMap:
+    dispatch_map[name] = handler
+    return dispatch_map
+
+
+def _build_tool_dispatch_map(registrations: Iterable[Tuple[str, ToolFn]]) -> ToolDispatchMap:
+    dispatch_map: ToolDispatchMap = {}
+    for name, handler in registrations:
+        register_tool_handler(dispatch_map, name, handler)
+    return dispatch_map
+
+
+def build_default_tools() -> ToolDispatchMap:
     # Keep tool names stable; they become part of the agent's contract.
+    # Harness boundary: to expose a new tool to the model, add one handler and
+    # register it in this dispatch map. The loop itself does not need changes.
     from .git_tools import (
         git_branch_list_tool,
         git_checkout_tool,
@@ -467,41 +482,42 @@ def build_default_tools() -> Dict[str, ToolFn]:
         gh_repo_list_tool,
     )
 
-    return {
-        'read_file': read_file_tool,
-        'write_file': write_file_tool,
-        'apply_patch': apply_patch_tool,
-        'search': search_tool,
-        'run_command': run_command_tool,
-        'web_search': web_search_tool,
-        'fetch_url': fetch_url_tool,
-        'analyze_memory': analyze_memory_tool,
+    registrations: List[Tuple[str, ToolFn]] = [
+        ('read_file', read_file_tool),
+        ('write_file', write_file_tool),
+        ('apply_patch', apply_patch_tool),
+        ('search', search_tool),
+        ('run_command', run_command_tool),
+        ('web_search', web_search_tool),
+        ('fetch_url', fetch_url_tool),
+        ('analyze_memory', analyze_memory_tool),
         # Git
-        'git_status': git_status_tool,
-        'git_branch_list': git_branch_list_tool,
-        'git_checkout': git_checkout_tool,
-        'git_pull': git_pull_tool,
-        'git_merge': git_merge_tool,
-        'git_merge_and_push': git_merge_and_push_tool,
-        'git_push': git_push_tool,
+        ('git_status', git_status_tool),
+        ('git_branch_list', git_branch_list_tool),
+        ('git_checkout', git_checkout_tool),
+        ('git_pull', git_pull_tool),
+        ('git_merge', git_merge_tool),
+        ('git_merge_and_push', git_merge_and_push_tool),
+        ('git_push', git_push_tool),
         # GitHub (via gh CLI)
-        'gh_auth_status': gh_auth_status_tool,
-        'gh_repo_list': gh_repo_list_tool,
-        'gh_repo_create': gh_repo_create_tool,
-        'gh_repo_clone': gh_repo_clone_tool,
-        'gh_issue_list': gh_issue_list_tool,
-        'gh_issue_create': gh_issue_create_tool,
-        'gh_issue_close': gh_issue_close_tool,
-        'gh_pr_list': gh_pr_list_tool,
-        'gh_pr_create': gh_pr_create_tool,
-        'gh_pr_view': gh_pr_view_tool,
-        'gh_pr_checks': gh_pr_checks_tool,
-        'gh_pr_comment': gh_pr_comment_tool,
-        'gh_pr_merge': gh_pr_merge_tool,
-    }
+        ('gh_auth_status', gh_auth_status_tool),
+        ('gh_repo_list', gh_repo_list_tool),
+        ('gh_repo_create', gh_repo_create_tool),
+        ('gh_repo_clone', gh_repo_clone_tool),
+        ('gh_issue_list', gh_issue_list_tool),
+        ('gh_issue_create', gh_issue_create_tool),
+        ('gh_issue_close', gh_issue_close_tool),
+        ('gh_pr_list', gh_pr_list_tool),
+        ('gh_pr_create', gh_pr_create_tool),
+        ('gh_pr_view', gh_pr_view_tool),
+        ('gh_pr_checks', gh_pr_checks_tool),
+        ('gh_pr_comment', gh_pr_comment_tool),
+        ('gh_pr_merge', gh_pr_merge_tool),
+    ]
+    return _build_tool_dispatch_map(registrations)
 
 
-def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: Dict[str, ToolFn]) -> ToolResult:
+def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: ToolDispatchMap) -> ToolResult:
     tool = tools.get(tool_call.name)
     if tool is None:
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')
