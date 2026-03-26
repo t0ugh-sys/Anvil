@@ -12,6 +12,7 @@ from loop_agent.llm.providers import _mock_invoke_factory
 from loop_agent.mailbox import JsonlMailbox
 from loop_agent.subagents import SubAgentRuntime, SubAgentSpec
 from loop_agent.task_graph import Task, TaskGraph, TaskStatus
+from loop_agent.task_store import TaskStore
 from loop_agent.worktree_manager import WorktreeManager
 
 
@@ -88,6 +89,32 @@ class SubAgentRuntimeTests(unittest.TestCase):
             self.assertIn('workspace_root', metadata)
             self.assertIn('isolated', str(metadata['workspace_root']))
             self.assertFalse((tmp_dir / 'isolated' / 't1').exists())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_persist_task_state_during_runtime(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'subagents-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            graph = TaskGraph(
+                [
+                    Task(id='t1', title='Inspect', goal='inspect README and finish'),
+                    Task(id='t2', title='Summarize', goal='summarize findings', dependencies=('t1',)),
+                ]
+            )
+            mailbox = JsonlMailbox(tmp_dir / 'mailbox')
+            store = TaskStore(tmp_dir / '.tasks')
+            runtime = SubAgentRuntime(mailbox=mailbox, task_graph=graph, task_store=store)
+            spec = SubAgentSpec(agent_id='worker-1', role='reader', workspace_root=tmp_dir)
+
+            runtime.dispatch_ready_tasks(specs=(spec,), decider=_build_mock_decider())
+            reloaded = store.load_graph()
+
+            self.assertEqual(reloaded.get_task('t1').status, TaskStatus.completed)
+            self.assertEqual(reloaded.get_task('t2').status, TaskStatus.ready)
+            self.assertTrue((tmp_dir / '.tasks' / 'task_t1.json').exists())
+            self.assertTrue((tmp_dir / '.tasks' / 'task_t2.json').exists())
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

@@ -13,6 +13,7 @@ from loop_agent.mailbox import JsonlMailbox
 from loop_agent.scheduler import TaskScheduler
 from loop_agent.subagents import SubAgentRuntime, SubAgentSpec
 from loop_agent.task_graph import Task, TaskGraph, TaskStatus
+from loop_agent.task_store import TaskStore
 
 
 def _build_mock_decider():
@@ -75,6 +76,31 @@ class SchedulerTests(unittest.TestCase):
             )
             batch = scheduler.run_batch(specs=specs, decider=_build_mock_decider())
             self.assertEqual(len(batch.dispatched), 1)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_persist_scheduler_progress_to_task_store(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'scheduler-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            graph = TaskGraph(
+                [
+                    Task(id='t1', title='Inspect', goal='inspect README and finish'),
+                    Task(id='t2', title='Summarize', goal='summarize findings', dependencies=('t1',)),
+                ]
+            )
+            mailbox = JsonlMailbox(tmp_dir / 'mailbox')
+            store = TaskStore(tmp_dir / '.tasks')
+            runtime = SubAgentRuntime(mailbox=mailbox, task_graph=graph, task_store=store)
+            scheduler = TaskScheduler(runtime=runtime, max_parallel_agents=1)
+            spec = SubAgentSpec(agent_id='worker-1', role='reader', workspace_root=tmp_dir)
+
+            scheduler.run_until_idle(specs=(spec,), decider=_build_mock_decider())
+            reloaded = store.load_graph()
+
+            self.assertEqual(reloaded.get_task('t1').status, TaskStatus.completed)
+            self.assertEqual(reloaded.get_task('t2').status, TaskStatus.completed)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

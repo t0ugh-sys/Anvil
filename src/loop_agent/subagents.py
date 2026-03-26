@@ -11,6 +11,7 @@ from .core.types import ContextSnapshot, StopConfig
 from .mailbox import JsonlMailbox, MailMessage
 from .policies import ToolPolicy
 from .task_graph import Task, TaskGraph, TaskStatus
+from .task_store import TaskStore
 from .worktree_manager import WorktreeManager
 
 
@@ -42,14 +43,23 @@ class SubAgentRuntime:
         task_graph: TaskGraph,
         coordinator_id: str = 'coordinator',
         worktree_manager: WorktreeManager | None = None,
+        task_store: TaskStore | None = None,
     ) -> None:
         self.mailbox = mailbox
         self.task_graph = task_graph
         self.coordinator_id = coordinator_id
         self.worktree_manager = worktree_manager
+        self.task_store = task_store
+        self._persist_task_graph()
+
+    def _persist_task_graph(self) -> None:
+        if self.task_store is None:
+            return
+        self.task_store.save_graph(self.task_graph)
 
     def spawn(self, spec: SubAgentSpec, task: Task) -> Task:
         assigned = self.task_graph.assign_task(task.id, spec.agent_id)
+        self._persist_task_graph()
         self.mailbox.send(
             MailMessage(
                 id=f'{task.id}:assigned',
@@ -73,6 +83,7 @@ class SubAgentRuntime:
     ) -> SubAgentResult:
         task = self.task_graph.get_task(task_id)
         self.task_graph.mark_running(task_id, metadata={'agent_id': spec.agent_id})
+        self._persist_task_graph()
         self.mailbox.send(
             MailMessage(
                 id=f'{task_id}:started',
@@ -136,6 +147,7 @@ class SubAgentRuntime:
                     'workspace_root': str(workspace_root),
                 },
             )
+        self._persist_task_graph()
 
         self.mailbox.send(
             MailMessage(
