@@ -5,8 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from .agent_protocol import ToolResult
-from .tools import ToolContext
+from ..agent_protocol import ToolResult
+from ..tools import ToolContext
 
 
 @dataclass(frozen=True)

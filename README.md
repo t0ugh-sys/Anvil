@@ -1,9 +1,37 @@
 # LoopAgent
 
-LoopAgent is a loop-oriented agent framework with a stdlib-only Python core, a configurable LLM strategy layer, and a Node wrapper for users who prefer a global CLI entrypoint.
+LoopAgent is a tool-use feedback loop framework. The core pattern is:
+
+```text
+while model_is_calling_tools:
+    response = LLM(messages, tools)
+    execute tool calls
+    append tool results
+```
+
+Everything else in the project layers on top of that loop: policy, memory, hooks,
+task graphs, subagents, worktree isolation, and scheduling.
+
+The loop itself does not change when tools grow. We only extend the tool array and
+dispatch map:
+
+```text
++----------+      +-------+      +------------------+
+|   User   | ---> |  LLM  | ---> | Tool Dispatch    |
+|  prompt  |      |       |      | {                |
++----------+      +---+---+      |   bash: run_bash |
+                     ^          |   read: run_read |
+                     |          |   write: run_wr  |
+                     +----------+   edit: run_edit |
+                     tool_result| }                |
+                                +------------------+
+```
+
+Key rule: the loop stays stable; tools and routing evolve independently.
 
 ## Highlights
 
+- Tool-use feedback loop as the primary runtime model
 - Stdlib-only core in `src/loop_agent/`
 - Iterative agent loop with max-step, timeout, and cancellation stop conditions
 - Structured run artifacts in `.loopagent/runs/<run_id>/`
@@ -55,6 +83,60 @@ python -m loop_agent.cli --goal-file goal.txt --strategy json_stub --max-steps 1
 ```bash
 python -m loop_agent.agent_cli tools
 python -m loop_agent.agent_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
+```
+
+The `agent_cli` entrypoint is the direct CLI surface of the core loop:
+
+```text
+model decides -> tool calls execute -> tool results feed back -> stop or continue
+```
+
+Useful first commands:
+
+```bash
+python -m loop_agent.agent_cli --help
+python -m loop_agent.agent_cli code --help
+python -m loop_agent.agent_cli tools
+```
+
+## Visible Progress
+
+LoopAgent can keep a visible todo list inside the same tool-use loop.
+
+- The model updates progress through the `todo_write` tool
+- The runtime stores todo state in `ToolUseState`
+- The current todo list is injected back into `state_summary.todo_state`
+- If open todos are not updated for 3 rounds, the runtime injects `todo_reminder`
+
+Minimal tool payload:
+
+```json
+{
+  "thought": "track progress",
+  "plan": ["inspect repo", "edit file"],
+  "tool_calls": [
+    {
+      "id": "call_1",
+      "name": "todo_write",
+      "arguments": {
+        "items": [
+          {"id": "t1", "content": "inspect repo", "status": "completed"},
+          {"id": "t2", "content": "edit file", "status": "in_progress"}
+        ]
+      }
+    }
+  ],
+  "final": null
+}
+```
+
+Typical event metadata now includes:
+
+```text
+todo_state.items
+todo_state.lines
+todo_state.rounds_since_update
+todo_reminder
 ```
 
 ### Conda example
@@ -161,6 +243,11 @@ Built-in skills:
 | `commands` | Run shell commands | none |
 | `browser` | Browser automation | `playwright` |
 
+LoopAgent uses two-layer skill injection:
+
+- Layer 1: only skill `name + description` goes into the prompt
+- Layer 2: full skill instructions are loaded on demand through `load_skill`
+
 Load specific skills:
 
 ```bash
@@ -169,9 +256,17 @@ python -m loop_agent.agent_cli code --goal "search for info" --skill web_search 
 
 ## Project Layout
 
-- `agents/`: guided learning-path scripts from minimal loop to team/subagent orchestration
 - `skills/`: built-in skill notes and extension references
+- `skills/<name>/SKILL.md`: skill frontmatter plus on-demand full instructions
 - `src/loop_agent/`: core package
+- `src/loop_agent/core/`: generic loop engine, stop rules, and serialization
+- `src/loop_agent/steps/`: reusable step strategies and registries
+- `src/loop_agent/memory/`: JSONL memory store and context loading
+- `src/loop_agent/llm/`: provider adapters
+- `src/loop_agent/ops/`: provider doctor, git, and GitHub operational helpers
+- `src/loop_agent/tool_use_loop.py`: the central model -> tools -> results loop
+- `src/loop_agent/tools.py`: builtin tool registry, dispatch map, and execution boundary
+- `src/loop_agent/ui/`: optional chat-oriented TUI entrypoints
 - `tests/`: unit tests
 - `examples/`: optional demos and integrations
 - `bin/loopagent.js`: npm bridge entrypoint

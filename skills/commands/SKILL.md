@@ -1,3 +1,8 @@
+---
+name: commands
+description: Run shell commands
+---
+
 # commands
 
 Use `commands` when the agent needs local verification such as tests, linters,

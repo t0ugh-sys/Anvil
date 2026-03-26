@@ -12,13 +12,44 @@ from loop_agent.agent_protocol import ToolCall
 from loop_agent.tools import (
     ToolContext,
     build_default_tools,
+    builtin_tool_registrations,
     execute_tool_call,
     fetch_url_tool,
     register_tool_handler,
 )
+from loop_agent.skills import SkillLoader
 
 
 class ToolsTests(unittest.TestCase):
+    def test_should_build_dispatch_from_builtin_registrations(self) -> None:
+        registrations = builtin_tool_registrations()
+        names = [name for name, _ in registrations]
+        dispatch = build_default_tools()
+
+        self.assertIn('read_file', names)
+        self.assertIn('compact', names)
+        self.assertIn('todo_write', names)
+        self.assertIn('load_skill', names)
+        self.assertIn('run_command_async', names)
+        self.assertIn('git_status', names)
+        self.assertIn('gh_issue_list', names)
+        self.assertEqual(set(names), set(dispatch.keys()))
+
+    def test_should_load_skill_body_on_demand(self) -> None:
+        loader = SkillLoader()
+        self.assertTrue(loader.load('files'))
+        call = ToolCall(id='call_1', name='load_skill', arguments={'name': 'files'})
+        result = execute_tool_call(
+            ToolContext(workspace_root=Path('.'), skill_loader=loader),
+            call,
+            build_default_tools(),
+        )
+
+        self.assertTrue(result.ok, msg=result.error or '')
+        self.assertIn('<skill name="files">', result.output)
+        self.assertIn('provided tools:', result.output.lower())
+        self.assertIn('apply_patch', result.output)
+
     def test_should_register_custom_tool_handler_in_dispatch_map(self) -> None:
         def echo_tool(context: ToolContext, args):
             return type('Result', (), {})  # pragma: no cover

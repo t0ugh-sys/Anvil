@@ -147,7 +147,7 @@ def _require_textual():
 
 def _build_chat_invoke(cfg: ChatConfig):
     if cfg.provider == 'openai_compatible':
-        from .llm.providers import openai_compatible_chat_invoke_factory
+        from ..llm.providers import openai_compatible_chat_invoke_factory
 
         api_key = os.getenv(cfg.api_key_env, '').strip()
         if not api_key:
@@ -168,7 +168,7 @@ def _build_chat_invoke(cfg: ChatConfig):
         )
 
     if cfg.provider == 'anthropic':
-        from .llm.providers import anthropic_invoke_factory
+        from ..llm.providers import anthropic_invoke_factory
 
         api_key = os.getenv(cfg.api_key_env, '').strip()
         if not api_key:
@@ -183,7 +183,7 @@ def _build_chat_invoke(cfg: ChatConfig):
         )
 
     if cfg.provider == 'gemini':
-        from .llm.providers import gemini_invoke_factory
+        from ..llm.providers import gemini_invoke_factory
 
         api_key = os.getenv(cfg.api_key_env, '').strip()
         if not api_key:

@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .llm.providers import parse_provider_headers
+from ..llm.providers import parse_provider_headers
 
 
 @dataclass(frozen=True)

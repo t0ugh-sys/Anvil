@@ -5,17 +5,59 @@ import unittest
 import uuid
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.agent_cli import _run_code_command, build_parser
+from loop_agent.agent_cli import _build_coding_decider, _run_code_command, build_parser
+from loop_agent.skills import SkillLoader
 
 
 class AgentCliTests(unittest.TestCase):
+    def test_should_only_include_skill_metadata_in_prompt(self) -> None:
+        loader = SkillLoader()
+        self.assertTrue(loader.load('files'))
+        captured = {}
+
+        def fake_invoke(prompt: str) -> str:
+            captured['prompt'] = prompt
+            return '{"thought":"done","plan":[],"tool_calls":[],"final":"done"}'
+
+        parser = build_parser()
+        args = parser.parse_args(['code', '--goal', 'x', '--provider', 'mock', '--model', 'mock-v3'])
+
+        with patch('loop_agent.agent_cli.build_invoke_from_args', return_value=fake_invoke):
+            decider = _build_coding_decider(args, loader)
+            decider('goal', tuple(), tuple(), {}, tuple())
+
+        prompt = captured['prompt']
+        self.assertIn('Available skills:', prompt)
+        self.assertIn('- files: Read, write, patch, and search files', prompt)
+        self.assertNotIn('# LoopAgent Skills', prompt)
+
+    def test_should_describe_tool_use_loop_in_root_help(self) -> None:
+        parser = build_parser()
+        help_text = parser.format_help()
+        self.assertIn('tool-use feedback loop', help_text)
+
     def test_should_list_tools_subcommand(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['tools'])
         self.assertEqual(args.command, 'tools')
+
+    def test_should_describe_tool_use_loop_in_code_help(self) -> None:
+        parser = build_parser()
+        code_parser = build_parser()._subparsers._group_actions[0].choices['code']
+        self.assertIn('tool-use feedback loop', code_parser.format_help())
+
+    def test_should_show_examples_and_groups_in_code_help(self) -> None:
+        code_parser = build_parser()._subparsers._group_actions[0].choices['code']
+        help_text = code_parser.format_help()
+        self.assertIn('Examples:', help_text)
+        self.assertIn('execution:', help_text)
+        self.assertIn('provider:', help_text)
+        self.assertIn('memory and artifacts:', help_text)
+        self.assertIn('tool dispatch:', help_text)
 
     def test_should_parse_doctor_subcommand(self) -> None:
         parser = build_parser()
@@ -84,6 +126,16 @@ class AgentCliTests(unittest.TestCase):
                 'events.jsonl',
                 '--no-record-run',
                 '--include-history',
+                '--tasks-dir',
+                '.tasks-dev',
+                '--transcripts-dir',
+                '.transcripts-dev',
+                '--max-context-tokens',
+                '2048',
+                '--micro-compact-keep',
+                '4',
+                '--recent-transcript-entries',
+                '6',
             ]
         )
         self.assertEqual(args.memory_dir, 'mem')
@@ -92,6 +144,11 @@ class AgentCliTests(unittest.TestCase):
         self.assertEqual(args.observer_file, 'events.jsonl')
         self.assertFalse(args.record_run)
         self.assertTrue(args.include_history)
+        self.assertEqual(args.tasks_dir, '.tasks-dev')
+        self.assertEqual(args.transcripts_dir, '.transcripts-dev')
+        self.assertEqual(args.max_context_tokens, 2048)
+        self.assertEqual(args.micro_compact_keep, 4)
+        self.assertEqual(args.recent_transcript_entries, 6)
 
     def test_should_record_structured_tool_events(self) -> None:
         parser = build_parser()
@@ -127,6 +184,31 @@ class AgentCliTests(unittest.TestCase):
             metadata = step_succeeded[0]['payload'].get('metadata', {})
             self.assertIn('tool_calls', metadata)
             self.assertIn('tool_results', metadata)
+            self.assertIn('todo_state', metadata)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_create_task_store_directory_by_default(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'ocli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            args = parser.parse_args(
+                [
+                    'code',
+                    '--goal',
+                    'read workspace then finalize',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                ]
+            )
+            _run_code_command(args)
+            self.assertTrue((tmp_dir / '.tasks').exists())
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

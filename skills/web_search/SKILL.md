@@ -1,3 +1,8 @@
+---
+name: web_search
+description: Search the web and fetch URLs
+---
+
 # web_search
 
 Use `web_search` when the task needs current external information that does not

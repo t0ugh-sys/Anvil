@@ -2,7 +2,6 @@
 
 ## Top Level
 
-- `agents/`: staged learning path and runnable harness walkthroughs
 - `skills/`: human-readable skill contracts and boundaries
 - `docs/`: architecture and artifact references
 - `examples/`: integration-oriented demos

@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 from loop_agent.agent_protocol import ToolResult
@@ -36,6 +37,20 @@ class Skill:
         """Return additional context for prompts."""
         return {}
 
+    def get_body(self) -> str:
+        """Return full skill instructions for on-demand loading."""
+        return ''
+
+
+class LocalDocumentSkill(Skill):
+    def __init__(self, *, name: str, description: str, body: str) -> None:
+        self.name = name
+        self.description = description
+        self._body = body
+
+    def get_body(self) -> str:
+        return self._body
+
 
 # Built-in skills registry
 _SKILL_REGISTRY: dict[str, type[Skill]] = {}
@@ -46,17 +61,123 @@ def register_skill(skill_class: type[Skill]) -> None:
     _SKILL_REGISTRY[skill_class.name] = skill_class
 
 
-def get_skill(name: str) -> Skill | None:
+def _skills_docs_root() -> Path:
+    return Path(__file__).resolve().parents[2] / 'skills'
+
+
+def _skill_doc_path(name: str) -> Path:
+    return _skills_docs_root() / name / 'SKILL.md'
+
+
+def _legacy_skill_doc_path(name: str) -> Path:
+    return _skills_docs_root() / f'{name}.md'
+
+
+def _skill_doc_path_for_root(root: Path, name: str) -> Path:
+    return root / name / 'SKILL.md'
+
+
+def _legacy_skill_doc_path_for_root(root: Path, name: str) -> Path:
+    return root / f'{name}.md'
+
+
+def _parse_skill_frontmatter(raw: str) -> tuple[dict[str, str], str]:
+    text = raw.strip()
+    if not text.startswith('---\n'):
+        return {}, text
+
+    lines = text.splitlines()
+    meta: dict[str, str] = {}
+    end_index = -1
+    for index in range(1, len(lines)):
+        line = lines[index].strip()
+        if line == '---':
+            end_index = index
+            break
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        meta[key.strip()] = value.strip()
+
+    if end_index < 0:
+        return {}, text
+
+    body = '\n'.join(lines[end_index + 1 :]).strip()
+    return meta, body
+
+
+def _read_skill_doc(name: str) -> tuple[dict[str, str], str]:
+    path = _skill_doc_path(name)
+    if path.exists():
+        return _parse_skill_frontmatter(path.read_text(encoding='utf-8'))
+
+    legacy_path = _legacy_skill_doc_path(name)
+    if legacy_path.exists():
+        return _parse_skill_frontmatter(legacy_path.read_text(encoding='utf-8'))
+
+    return {}, ''
+
+
+def _read_skill_doc_from_root(root: Path, name: str) -> tuple[dict[str, str], str]:
+    path = _skill_doc_path_for_root(root, name)
+    if path.exists():
+        return _parse_skill_frontmatter(path.read_text(encoding='utf-8'))
+
+    legacy_path = _legacy_skill_doc_path_for_root(root, name)
+    if legacy_path.exists():
+        return _parse_skill_frontmatter(legacy_path.read_text(encoding='utf-8'))
+
+    return {}, ''
+
+
+def discover_local_skill_names(docs_root: Path | None = None) -> list[str]:
+    root = docs_root or _skills_docs_root()
+    names = set()
+    if not root.exists():
+        return []
+
+    for child in root.iterdir():
+        if child.is_dir() and (child / 'SKILL.md').exists():
+            names.add(child.name)
+        elif child.is_file() and child.suffix.lower() == '.md' and child.name != 'README.md':
+            names.add(child.stem)
+    return sorted(names)
+
+
+def _build_local_document_skill(name: str, docs_root: Path | None = None) -> Skill | None:
+    root = docs_root or _skills_docs_root()
+    meta, body = _read_skill_doc_from_root(root, name)
+    if not body and not meta:
+        return None
+    skill_name = meta.get('name', name)
+    description = meta.get('description', f'Local skill: {skill_name}')
+    return LocalDocumentSkill(name=skill_name, description=description, body=body)
+
+
+def get_skill(name: str, docs_root: Path | None = None) -> Skill | None:
     """Get a skill instance by name."""
     skill_class = _SKILL_REGISTRY.get(name)
     if skill_class:
         return skill_class()
-    return None
+    return _build_local_document_skill(name, docs_root=docs_root)
 
 
 def list_skills() -> list[str]:
     """List all registered skills."""
-    return list(_SKILL_REGISTRY.keys())
+    names = set(_SKILL_REGISTRY.keys())
+    names.update(discover_local_skill_names())
+    return sorted(names)
+
+
+def skill_metadata(name: str) -> dict[str, str] | None:
+    skill = get_skill(name)
+    if skill is None:
+        return None
+    meta, _ = _read_skill_doc(name)
+    return {
+        'name': meta.get('name', skill.name),
+        'description': meta.get('description', skill.description),
+    }
 
 
 # ============== Built-in Skills ==============
@@ -151,13 +272,14 @@ register_skill(BrowserSkill)
 class SkillLoader:
     """Dynamic skill loader for external skills."""
     
-    def __init__(self):
+    def __init__(self, *, docs_root: Path | None = None):
         self._loaded_skills: dict[str, Skill] = {}
+        self._docs_root = docs_root or _skills_docs_root()
     
     def load(self, name: str) -> bool:
         """Load a skill by name."""
         # Check built-in skills
-        skill = get_skill(name)
+        skill = get_skill(name, docs_root=self._docs_root)
         if skill:
             self._loaded_skills[name] = skill
             return True
@@ -201,6 +323,30 @@ class SkillLoader:
             ctx = skill.get_prompt_context()
             context.update(ctx)
         return context
+
+    def metadata(self) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        for skill in self._loaded_skills.values():
+            meta, _ = _read_skill_doc_from_root(self._docs_root, skill.name)
+            items.append({
+                'name': meta.get('name', skill.name),
+                'description': meta.get('description', skill.description),
+            })
+        return items
+
+    def load_body(self, name: str) -> str | None:
+        skill = self._loaded_skills.get(name)
+        if skill is None:
+            return None
+        meta, body = _read_skill_doc_from_root(self._docs_root, name)
+        if body:
+            return body
+        generated = skill.get_body().strip()
+        if generated:
+            return generated
+        title = meta.get('name', skill.name)
+        description = meta.get('description', skill.description)
+        return f'# {title}\n\n{description}'
     
     def list_loaded(self) -> list[str]:
         """List loaded skill names."""

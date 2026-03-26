@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .tui_chat import main
+from .ui.tui_chat import main
 
 
 if __name__ == '__main__':

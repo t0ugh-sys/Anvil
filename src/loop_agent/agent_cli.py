@@ -10,13 +10,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .agent_protocol import render_agent_step_schema
 from .coding_agent import run_coding_agent
+from .compression import CompressionConfig, summarize_entries_deterministically
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, StopConfig
-from .doctor import format_doctor_report, run_provider_doctor
 from .llm.providers import build_invoke_from_args
 from .memory.jsonl_store import JsonlMemoryStore
+from .ops.doctor import format_doctor_report, run_provider_doctor
 from .run_recorder import RunRecorder
 from .skills import SkillLoader, list_skills, get_skill
+from .task_store import TaskStore
 from .tools import build_default_tools
 
 
@@ -30,7 +32,7 @@ def _resolve_goal(args: argparse.Namespace) -> str:
     return args.goal.strip()
 
 
-def _build_coding_decider(args: argparse.Namespace):
+def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None):
     invoke = build_invoke_from_args(args, mode='coding')
 
     def decider(
@@ -41,8 +43,15 @@ def _build_coding_decider(args: argparse.Namespace):
         last_steps: Tuple[str, ...],
     ) -> str:
         history_window = max(1, args.history_window)
+        skill_lines: List[str] = []
+        if skills is not None:
+            for item in skills.metadata():
+                skill_lines.append(f'- {item["name"]}: {item["description"]}')
         prompt = (
-            'You are a coding agent. Return strict JSON matching schema:\n'
+            'You are a coding agent. Return strict JSON matching schema.\n'
+            'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
+            + ('Available skills:\n' + '\n'.join(skill_lines) + '\n' if skill_lines else '')
+            + 'Do not inline full skill instructions in the prompt. Load them on demand with load_skill.\n'
             + render_agent_step_schema()
             + '\nGoal:\n'
             + goal
@@ -59,6 +68,31 @@ def _build_coding_decider(args: argparse.Namespace):
         return invoke(prompt)
 
     return decider
+
+
+def _build_coding_summarizer(args: argparse.Namespace):
+    if str(args.provider) == 'mock':
+        return None
+
+    invoke = build_invoke_from_args(args, mode='coding')
+
+    def summarizer(goal: str, previous_summary: str, transcript) -> str:
+        transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
+        prompt = (
+            'Summarize the coding-agent conversation for long-running context compression.\n'
+            'Return plain text only.\n'
+            'Keep: user goal, constraints, files changed, tool outcomes, unfinished work.\n'
+            f'Goal:\n{goal}\n'
+            f'Previous summary:\n{previous_summary or "none"}\n'
+            'Recent transcript:\n'
+            + '\n'.join(transcript_lines)
+        )
+        response = invoke(prompt).strip()
+        if response:
+            return response
+        return summarize_entries_deterministically(goal=goal, previous_summary=previous_summary, entries=transcript)
+
+    return summarizer
 
 
 def _load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
@@ -104,6 +138,13 @@ def _merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn]:
 def _run_code_command(args: argparse.Namespace) -> int:
     goal = _resolve_goal(args)
     workspace_root = Path(args.workspace).resolve()
+    task_store = TaskStore((workspace_root / args.tasks_dir).resolve()) if args.tasks_dir else None
+    compression_config = CompressionConfig(
+        micro_keep_last_results=args.micro_compact_keep,
+        max_context_tokens=args.max_context_tokens,
+        recent_transcript_entries=args.recent_transcript_entries,
+    )
+    transcripts_dir = (workspace_root / args.transcripts_dir).resolve() if args.transcripts_dir else None
     run_id = args.run_id or _default_run_id()
     memory_run_dir = Path(args.memory_dir) / run_id
     memory_store = JsonlMemoryStore(memory_dir=memory_run_dir, summarize_every=args.summarize_every)
@@ -123,8 +164,9 @@ def _run_code_command(args: argparse.Namespace) -> int:
         context = memory_store.load_context(goal=goal, last_k_steps=args.history_window)
         return ContextSnapshot(state_summary=context.state_summary, last_steps=context.last_steps)
 
-    decider = _build_coding_decider(args)
     skills = _load_skills_from_args(args)
+    decider = _build_coding_decider(args, skills)
+    summarizer = _build_coding_summarizer(args)
     result = run_coding_agent(
         goal=goal,
         decider=decider,
@@ -133,6 +175,10 @@ def _run_code_command(args: argparse.Namespace) -> int:
         observer=observer,
         context_provider=context_provider,
         skills=skills,
+        task_store=task_store,
+        compression_config=compression_config,
+        transcripts_dir=transcripts_dir,
+        summarizer=summarizer,
     )
     memory_store.on_event(
         'run_finished',
@@ -211,63 +257,113 @@ def _run_doctor_command(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='agent_cli')
+    parser = argparse.ArgumentParser(
+        prog='agent_cli',
+        description='Run LoopAgent as a tool-use feedback loop: model decides, tools execute, results feed back.',
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest='command', required=True)
 
-    code = subparsers.add_parser('code', help='run coding agent loop')
+    code = subparsers.add_parser(
+        'code',
+        help='run the coding tool-use loop',
+        description='Run the coding runtime as a tool-use feedback loop over a workspace.',
+        epilog=(
+            'Examples:\n'
+            '  agent_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3\n'
+            '  agent_cli code --goal-file goal.txt --workspace . --provider openai_compatible --model gpt-5.3-codex \\\n'
+            '    --base-url https://codex-api.packycode.com/v1 --wire-api responses --output json\n'
+            '  agent_cli code --goal "search docs then summarize" --workspace . --skill web_search --skill memory\n'
+            '  agent_cli code --goal "fix tests" --workspace . --observer-file events.jsonl --memory-dir .loopagent/runs\n'
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     goal_group = code.add_mutually_exclusive_group(required=True)
-    goal_group.add_argument('--goal')
-    goal_group.add_argument('--goal-file')
-    code.add_argument('--workspace', default='.')
-    code.add_argument('--provider', choices=['mock', 'openai_compatible', 'anthropic', 'gemini'], default='mock')
-    code.add_argument('--model', default='mock-model')
-    code.add_argument('--base-url', default='')
-    code.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
-    code.add_argument('--api-key-env', default='OPENAI_API_KEY')
-    code.add_argument('--temperature', type=float, default=0.2)
-    code.add_argument('--provider-timeout-s', type=float, default=60.0)
-    code.add_argument('--provider-debug', action='store_true')
-    code.add_argument('--fallback-model', action='append', default=[])
-    code.add_argument('--max-retries', type=int, default=2)
-    code.add_argument('--retry-backoff-s', type=float, default=1.0)
-    code.add_argument('--retry-http-code', action='append', type=int, default=[])
-    code.add_argument(
+    goal_group.add_argument('--goal', help='Direct goal text for the tool-use loop')
+    goal_group.add_argument('--goal-file', help='UTF-8 goal file for the tool-use loop')
+
+    execution_group = code.add_argument_group('execution')
+    execution_group.add_argument('--workspace', default='.', help='Workspace root available to tools')
+    execution_group.add_argument('--max-steps', type=int, default=12, help='Maximum tool-use rounds before stopping')
+    execution_group.add_argument('--timeout-s', type=float, default=120.0, help='Maximum elapsed seconds for the run')
+    execution_group.add_argument('--output', choices=['text', 'json'], default='text')
+    execution_group.add_argument('--include-history', action='store_true')
+
+    provider_group = code.add_argument_group('provider')
+    provider_group.add_argument(
+        '--provider',
+        choices=['mock', 'openai_compatible', 'anthropic', 'gemini'],
+        default='mock',
+    )
+    provider_group.add_argument('--model', default='mock-model')
+    provider_group.add_argument('--base-url', default='')
+    provider_group.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
+    provider_group.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    provider_group.add_argument('--temperature', type=float, default=0.2)
+    provider_group.add_argument('--provider-timeout-s', type=float, default=60.0)
+    provider_group.add_argument('--provider-debug', action='store_true')
+    provider_group.add_argument('--fallback-model', action='append', default=[])
+    provider_group.add_argument('--max-retries', type=int, default=2)
+    provider_group.add_argument('--retry-backoff-s', type=float, default=1.0)
+    provider_group.add_argument('--retry-http-code', action='append', type=int, default=[])
+    provider_group.add_argument(
         '--provider-header',
         action='append',
         default=[],
         help='provider extra header Key:Value, repeatable',
     )
-    code.add_argument('--max-steps', type=int, default=12)
-    code.add_argument('--timeout-s', type=float, default=120.0)
-    code.add_argument('--history-window', type=int, default=8)
-    code.add_argument('--observer-file')
-    code.add_argument('--memory-dir', default='.loopagent/runs')
-    code.add_argument('--run-id')
-    code.add_argument('--summarize-every', type=int, default=5)
-    code.add_argument('--record-run', action='store_true', default=True)
-    code.add_argument('--no-record-run', action='store_false', dest='record_run')
-    code.add_argument('--runs-dir', default='.loopagent/runs')
-    code.add_argument('--include-history', action='store_true')
-    code.add_argument('--output', choices=['text', 'json'], default='text')
-    code.add_argument(
+
+    memory_group = code.add_argument_group('memory and artifacts')
+    memory_group.add_argument('--history-window', type=int, default=8, help='How many recent loop outputs to feed back')
+    memory_group.add_argument('--observer-file', help='Write observer events as JSONL')
+    memory_group.add_argument('--memory-dir', default='.loopagent/runs', help='Persistent memory root for run state')
+    memory_group.add_argument('--run-id', help='Optional run id for memory and artifacts')
+    memory_group.add_argument('--summarize-every', type=int, default=5, help='Refresh memory summary every N rounds')
+    memory_group.add_argument('--record-run', action='store_true', default=True)
+    memory_group.add_argument('--no-record-run', action='store_false', dest='record_run')
+    memory_group.add_argument('--runs-dir', default='.loopagent/runs', help='Directory for structured run artifacts')
+    memory_group.add_argument('--tasks-dir', default='.tasks', help='Workspace-relative task graph directory injected into context')
+    memory_group.add_argument('--transcripts-dir', default='.transcripts', help='Workspace-relative archive directory for compacted transcripts')
+    memory_group.add_argument('--max-context-tokens', type=int, default=50000, help='Auto-compact when estimated context exceeds this budget')
+    memory_group.add_argument('--micro-compact-keep', type=int, default=3, help='Keep full content for the most recent N tool results')
+    memory_group.add_argument('--recent-transcript-entries', type=int, default=8, help='Expose the most recent compacted transcript entries in state summary')
+
+    tool_group = code.add_argument_group('tool dispatch')
+    tool_group.add_argument(
         '--skill',
         action='append',
         default=[],
         dest='skills',
-        help='Skills to load (web_search, memory, files, commands, browser, or "all")',
+        help='Skills to load into the tool dispatch (web_search, memory, files, commands, browser, or "all")',
     )
 
-    tools = subparsers.add_parser('tools', help='list available tools')
+    tools = subparsers.add_parser(
+        'tools',
+        help='list tools exposed to the loop',
+        description='List tool handlers available to the coding tool-use loop.',
+    )
     tools.set_defaults(handler=_run_tools_command)
 
-    skills_parser = subparsers.add_parser('skills', help='list available skills')
+    skills_parser = subparsers.add_parser(
+        'skills',
+        help='list available skills',
+        description='List optional skills that can extend the loop tool dispatch.',
+    )
     skills_parser.set_defaults(handler=_run_skills_command)
 
-    replay = subparsers.add_parser('replay', help='print events jsonl')
+    replay = subparsers.add_parser(
+        'replay',
+        help='print recorded loop events',
+        description='Print a recorded JSONL event stream for a previous tool-use run.',
+    )
     replay.add_argument('--events-file', required=True)
     replay.set_defaults(handler=_run_replay_command)
 
-    doctor = subparsers.add_parser('doctor', help='diagnose provider connectivity and gateway status')
+    doctor = subparsers.add_parser(
+        'doctor',
+        help='diagnose provider connectivity',
+        description='Diagnose provider connectivity before running the tool-use loop.',
+    )
     doctor.add_argument('--provider', choices=['openai_compatible'], default='openai_compatible')
     doctor.add_argument('--model', default='gpt-5.3-codex')
     doctor.add_argument('--base-url', required=True)
