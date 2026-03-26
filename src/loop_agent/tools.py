@@ -9,16 +9,18 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 from .agent_protocol import ToolCall, ToolResult
 from .policies import ToolPolicy
+from .todo import render_todo_lines
 
 
 @dataclass(frozen=True)
 class ToolContext:
     workspace_root: Path
     policy: ToolPolicy = ToolPolicy.allow_all()
+    todo_manager: Any = None
 
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
@@ -442,6 +444,27 @@ def analyze_memory_tool(context: ToolContext, args: Dict[str, object]) -> ToolRe
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
+def todo_write_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
+    call_id = str(args.get('id', 'todo_write'))
+    manager = context.todo_manager
+    if manager is None:
+        return ToolResult(id=call_id, ok=False, output='', error='todo manager is not configured')
+
+    items = args.get('items')
+    if not isinstance(items, list):
+        return ToolResult(id=call_id, ok=False, output='', error='items list is required')
+
+    try:
+        updated_items = manager.write(items)
+        lines = [
+            'todo updated',
+            *[f'- {line}' for line in render_todo_lines(updated_items)],
+        ]
+        return ToolResult(id=call_id, ok=True, output='\n'.join(lines), error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output='', error=str(exc))
+
+
 def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: ToolFn) -> ToolDispatchMap:
     dispatch_map[name] = handler
     return dispatch_map
@@ -456,6 +479,7 @@ def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolD
 
 def _builtin_core_tool_registrations() -> List[ToolRegistration]:
     return [
+        ('todo_write', todo_write_tool),
         ('read_file', read_file_tool),
         ('write_file', write_file_tool),
         ('apply_patch', apply_patch_tool),

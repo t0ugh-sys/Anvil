@@ -26,6 +26,7 @@ class ToolsTests(unittest.TestCase):
         dispatch = build_default_tools()
 
         self.assertIn('read_file', names)
+        self.assertIn('todo_write', names)
         self.assertIn('git_status', names)
         self.assertIn('gh_issue_list', names)
         self.assertEqual(set(names), set(dispatch.keys()))

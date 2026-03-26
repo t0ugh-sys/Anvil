@@ -146,6 +146,7 @@ class AgentCliTests(unittest.TestCase):
             metadata = step_succeeded[0]['payload'].get('metadata', {})
             self.assertIn('tool_calls', metadata)
             self.assertIn('tool_results', metadata)
+            self.assertIn('todo_state', metadata)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

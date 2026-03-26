@@ -42,7 +42,8 @@ def _build_coding_decider(args: argparse.Namespace):
     ) -> str:
         history_window = max(1, args.history_window)
         prompt = (
-            'You are a coding agent. Return strict JSON matching schema:\n'
+            'You are a coding agent. Return strict JSON matching schema.\n'
+            'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
             + render_agent_step_schema()
             + '\nGoal:\n'
             + goal

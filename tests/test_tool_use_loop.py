@@ -9,6 +9,7 @@ import _bootstrap  # noqa: F401
 
 from loop_agent.core.types import StepContext
 from loop_agent.tool_use_loop import ToolUseState, make_tool_use_step
+from loop_agent.todo import TodoItem
 
 
 class ToolUseLoopTests(unittest.TestCase):
@@ -94,5 +95,66 @@ class ToolUseLoopTests(unittest.TestCase):
             self.assertIn('thought: inspect readme', result.state.history)
             self.assertIn('tool[call_1] ok', result.state.history)
             self.assertEqual(result.metadata.get('tool_calls')[0]['name'], 'read_file')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_update_todo_state_via_tool(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return (
+                    '{"thought":"update todos","plan":["track"],'
+                    '"tool_calls":[{"id":"call_1","name":"todo_write","arguments":{"items":['
+                    '{"id":"t1","content":"inspect repo","status":"completed"},'
+                    '{"id":"t2","content":"edit file","status":"in_progress"}]}}],'
+                    '"final":"later"}'
+                )
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='x',
+                state=ToolUseState(rounds_since_todo_update=4),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+            result = step(context)
+
+            self.assertFalse(result.done)
+            self.assertEqual(result.state.rounds_since_todo_update, 0)
+            self.assertEqual(result.state.todos[0].id, 't1')
+            self.assertEqual(result.state.todos[1].status, 'in_progress')
+            self.assertIn('todo_state', result.metadata)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_inject_todo_reminder_after_stale_rounds(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        captured = {}
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                captured['state_summary'] = state_summary
+                return '{"thought":"done now","plan":[],"tool_calls":[],"final":null}'
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='x',
+                state=ToolUseState(
+                    todos=(TodoItem(id='t1', content='keep visible progress', status='in_progress'),),
+                    rounds_since_todo_update=3,
+                ),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+            step(context)
+
+            summary = captured['state_summary']
+            self.assertIn('todo_state', summary)
+            self.assertIn('todo_reminder', summary)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
