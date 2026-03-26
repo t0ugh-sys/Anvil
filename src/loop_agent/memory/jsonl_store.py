@@ -19,6 +19,13 @@ def _default_summary() -> Dict[str, Any]:
         'open_questions': [],
         'next_actions': [],
         'steps': 0,
+        'compression_state': {
+            'summary': '',
+            'compaction_count': 0,
+            'archived_transcripts': [],
+            'recent_transcript': [],
+            'last_compaction_reason': '',
+        },
     }
 
 
@@ -201,6 +208,21 @@ class JsonlMemoryStore:
                             ok = item.get('ok')
                             if isinstance(tool_id, str) and isinstance(ok, bool):
                                 state['work_done'].append(f'tool[{tool_id}] {"ok" if ok else "failed"}')
+                    compression_state = metadata.get('compression_state')
+                    if isinstance(compression_state, dict):
+                        state['compression_state'] = {
+                            'summary': str(compression_state.get('summary', '')),
+                            'compaction_count': int(compression_state.get('compaction_count', 0)),
+                            'archived_transcripts': [
+                                item for item in compression_state.get('archived_transcripts', [])
+                                if isinstance(item, str)
+                            ],
+                            'recent_transcript': [
+                                item for item in compression_state.get('recent_transcript', [])
+                                if isinstance(item, str)
+                            ],
+                            'last_compaction_reason': str(compression_state.get('last_compaction_reason', '')),
+                        }
 
             if event == 'step_failed':
                 error = payload.get('error', '')
