@@ -21,7 +21,8 @@ python -m loop_agent.agent_cli code --goal "inspect the repo" --workspace . --sk
 
 ## Skill Notes
 
-- [files.md](D:\workspace\LoopAgent\skills\files.md)
-- [commands.md](D:\workspace\LoopAgent\skills\commands.md)
-- [memory.md](D:\workspace\LoopAgent\skills\memory.md)
-- [web_search.md](D:\workspace\LoopAgent\skills\web_search.md)
+- [files/SKILL.md](D:\workspace\LoopAgent\skills\files\SKILL.md)
+- [commands/SKILL.md](D:\workspace\LoopAgent\skills\commands\SKILL.md)
+- [memory/SKILL.md](D:\workspace\LoopAgent\skills\memory\SKILL.md)
+- [web_search/SKILL.md](D:\workspace\LoopAgent\skills\web_search\SKILL.md)
+- [browser/SKILL.md](D:\workspace\LoopAgent\skills\browser\SKILL.md)

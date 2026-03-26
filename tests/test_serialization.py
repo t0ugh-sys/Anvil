@@ -41,7 +41,29 @@ class SerializationTests(unittest.TestCase):
         self.assertEqual(payload['stop_reason'], 'done')
         self.assertEqual(payload['history'], ['a', 'b'])
 
+    def test_should_extract_compression_state_into_top_level_payload(self) -> None:
+        result = RunResult(
+            final_output='ok',
+            state={
+                'compact_summary': 'checkpoint-1',
+                'compaction_count': 2,
+                'archived_transcripts': ['.transcripts/compact_0002.json'],
+                'last_compaction_reason': 'auto',
+            },
+            done=True,
+            steps=2,
+            elapsed_s=0.2,
+            history=('a', 'b'),
+            stop_reason=StopReason.done,
+            error=None,
+        )
+
+        payload = run_result_to_dict(result, include_history=False)
+
+        self.assertEqual(payload['compression_state']['summary'], 'checkpoint-1')
+        self.assertEqual(payload['compression_state']['compaction_count'], 2)
+        self.assertEqual(payload['compression_state']['last_compaction_reason'], 'auto')
+
 
 if __name__ == '__main__':
     unittest.main()
-

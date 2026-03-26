@@ -55,6 +55,37 @@ class MemoryStoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_should_persist_compression_checkpoint_in_summary(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'memory-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            store = JsonlMemoryStore(memory_dir=tmp_dir, summarize_every=1)
+            store.on_event('run_started', {'goal': 'g1', 'facts': []})
+            store.on_event(
+                'step_succeeded',
+                {
+                    'output': 'done1',
+                    'metadata': {
+                        'compression_state': {
+                            'summary': 'checkpoint-1',
+                            'compaction_count': 1,
+                            'archived_transcripts': ['.transcripts/compact_0001.json'],
+                            'recent_transcript': ['summary: checkpoint-1'],
+                            'last_compaction_reason': 'manual',
+                        }
+                    },
+                },
+            )
+
+            context = store.load_context(goal='g1', last_k_steps=5)
+
+            compression_state = context.state_summary.get('compression_state', {})
+            self.assertEqual(compression_state.get('summary'), 'checkpoint-1')
+            self.assertEqual(compression_state.get('compaction_count'), 1)
+            self.assertEqual(compression_state.get('last_compaction_reason'), 'manual')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 if __name__ == '__main__':
     unittest.main()

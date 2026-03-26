@@ -17,6 +17,7 @@ class LearningPathTests(unittest.TestCase):
             root / 'agents' / 's04_skills.py',
             root / 'agents' / 's05_coding.py',
             root / 'agents' / 's06_team.py',
+            root / 'agents' / 's07_task_system.py',
             root / 'agents' / 's_full.py',
         ]
         for path in expected:
@@ -27,8 +28,13 @@ class LearningPathTests(unittest.TestCase):
         readme = (root / 'README.md').read_text(encoding='utf-8')
         self.assertIn('agents/', readme)
         self.assertIn('skills/', readme)
+        self.assertIn('skills/<name>/SKILL.md', readme)
+        self.assertIn('todo_write', readme)
+        self.assertIn('todo_reminder', readme)
         self.assertTrue((root / 'docs' / 'repo-layout.md').exists())
         self.assertTrue((root / 'skills' / 'README.md').exists())
+        self.assertTrue((root / 'skills' / 'files' / 'SKILL.md').exists())
+        self.assertTrue((root / 'skills' / 'commands' / 'SKILL.md').exists())
 
 
 if __name__ == '__main__':

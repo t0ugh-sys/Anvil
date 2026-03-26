@@ -11,7 +11,8 @@ but the examples are adapted to LoopAgent's runtime and APIs.
 4. `s04_skills.py`: inspect skill loading and capability boundaries
 5. `s05_coding.py`: run a coding-agent style tool loop
 6. `s06_team.py`: inspect task graph, mailbox, and sub-agent coordination
-7. `s_full.py`: see the complete harness view in one script
+7. `s07_task_system.py`: inspect persisted `.tasks/*.json` task graphs
+8. `s_full.py`: see the complete harness view in one script
 
 ## Run
 
@@ -22,6 +23,7 @@ python agents/s03_memory.py
 python agents/s04_skills.py
 python agents/s05_coding.py
 python agents/s06_team.py
+python agents/s07_task_system.py
 python agents/s_full.py
 ```
 

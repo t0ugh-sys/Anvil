@@ -35,6 +35,49 @@ class Task:
             'metadata': self.metadata,
         }
 
+    def to_store_dict(self, *, blocks: Tuple[str, ...] = tuple()) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'subject': self.title,
+            'goal': self.goal,
+            'status': self.status.value,
+            'blockedBy': list(self.dependencies),
+            'blocks': list(blocks),
+            'assignee': self.assignee,
+            'metadata': self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> 'Task':
+        task_id = str(payload.get('id', '')).strip()
+        title = str(payload.get('title', payload.get('subject', ''))).strip()
+        goal = str(payload.get('goal', '')) if payload.get('goal') is not None else ''
+        dependencies_raw = payload.get('dependencies', payload.get('blockedBy', []))
+        dependencies = tuple(
+            str(item).strip()
+            for item in dependencies_raw
+            if str(item).strip()
+        ) if isinstance(dependencies_raw, (list, tuple)) else tuple()
+        assignee_raw = payload.get('assignee')
+        assignee = str(assignee_raw).strip() if isinstance(assignee_raw, str) and assignee_raw.strip() else None
+        status_raw = str(payload.get('status', TaskStatus.pending.value)).strip() or TaskStatus.pending.value
+        try:
+            status = TaskStatus(status_raw)
+        except ValueError:
+            status = TaskStatus.pending
+        metadata = payload.get('metadata', {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return cls(
+            id=task_id,
+            title=title or task_id,
+            goal=goal or title or task_id,
+            dependencies=dependencies,
+            assignee=assignee,
+            status=status,
+            metadata=dict(metadata),
+        )
+
 
 class TaskGraph:
     def __init__(self, tasks: Iterable[Task] | None = None) -> None:
@@ -141,6 +184,33 @@ class TaskGraph:
 
     def to_dict(self) -> Dict[str, Any]:
         return {'tasks': [task.to_dict() for task in self._tasks.values()]}
+
+    def to_store_dict(self) -> Dict[str, Any]:
+        reverse_edges = self.reverse_dependencies()
+        return {
+            'tasks': [
+                task.to_store_dict(blocks=reverse_edges.get(task.id, tuple()))
+                for task in self._tasks.values()
+            ]
+        }
+
+    def reverse_dependencies(self) -> Dict[str, Tuple[str, ...]]:
+        reverse: Dict[str, List[str]] = {task_id: [] for task_id in self._tasks}
+        for task in self._tasks.values():
+            for dependency in task.dependencies:
+                reverse.setdefault(dependency, []).append(task.id)
+        return {
+            task_id: tuple(children)
+            for task_id, children in reverse.items()
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> 'TaskGraph':
+        tasks_raw = payload.get('tasks', [])
+        if not isinstance(tasks_raw, list):
+            raise ValueError('tasks must be a list')
+        tasks = [Task.from_dict(item) for item in tasks_raw if isinstance(item, dict)]
+        return cls(tasks)
 
     def _assert_acyclic(self) -> None:
         visiting: set[str] = set()

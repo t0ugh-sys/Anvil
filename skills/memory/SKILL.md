@@ -1,3 +1,8 @@
+---
+name: memory
+description: Analyze past runs and learn patterns
+---
+
 # memory
 
 Use `memory` when the agent must preserve durable task state instead of relying

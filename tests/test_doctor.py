@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.doctor import run_provider_doctor
+from loop_agent.ops.doctor import run_provider_doctor
 
 
 class DoctorTests(unittest.TestCase):
@@ -26,4 +26,3 @@ class DoctorTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

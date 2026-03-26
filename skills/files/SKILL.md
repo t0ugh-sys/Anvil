@@ -1,3 +1,8 @@
+---
+name: files
+description: Read, write, patch, and search files
+---
+
 # files
 
 Use `files` when the agent must inspect or modify repository content safely

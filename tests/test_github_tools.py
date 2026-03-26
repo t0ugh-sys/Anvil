@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.github_tools import (
+from loop_agent.ops.github_tools import (
     _parse_repo_from_remote,
     _resolve_repo_arg,
     gh_issue_close_tool,
