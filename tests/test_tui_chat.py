@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.tui_chat import (
+from loop_agent.ui.tui_chat import (
     ChatConfig,
     _build_model_config,
     _build_provider_config,

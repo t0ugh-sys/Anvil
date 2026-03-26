@@ -12,9 +12,9 @@ from .agent_protocol import render_agent_step_schema
 from .coding_agent import run_coding_agent
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, StopConfig
-from .doctor import format_doctor_report, run_provider_doctor
 from .llm.providers import build_invoke_from_args
 from .memory.jsonl_store import JsonlMemoryStore
+from .ops.doctor import format_doctor_report, run_provider_doctor
 from .run_recorder import RunRecorder
 from .skills import SkillLoader, list_skills, get_skill
 from .tools import build_default_tools

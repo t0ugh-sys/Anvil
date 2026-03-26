@@ -457,7 +457,7 @@ def build_default_tools() -> ToolDispatchMap:
     # Keep tool names stable; they become part of the agent's contract.
     # Harness boundary: to expose a new tool to the model, add one handler and
     # register it in this dispatch map. The loop itself does not need changes.
-    from .git_tools import (
+    from .ops.git_tools import (
         git_branch_list_tool,
         git_checkout_tool,
         git_merge_and_push_tool,
@@ -466,7 +466,7 @@ def build_default_tools() -> ToolDispatchMap:
         git_push_tool,
         git_status_tool,
     )
-    from .github_tools import (
+    from .ops.github_tools import (
         gh_auth_status_tool,
         gh_issue_close_tool,
         gh_issue_create_tool,

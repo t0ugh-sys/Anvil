@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from loop_agent.git_tools import git_merge_and_push_tool
+from loop_agent.ops.git_tools import git_merge_and_push_tool
 from loop_agent.tools import ToolContext
 
 

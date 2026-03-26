@@ -197,7 +197,13 @@ python -m loop_agent.agent_cli code --goal "search for info" --skill web_search 
 - `agents/`: guided learning-path scripts from minimal loop to team/subagent orchestration
 - `skills/`: built-in skill notes and extension references
 - `src/loop_agent/`: core package
+- `src/loop_agent/core/`: generic loop engine, stop rules, and serialization
+- `src/loop_agent/steps/`: reusable step strategies and registries
+- `src/loop_agent/memory/`: JSONL memory store and context loading
+- `src/loop_agent/llm/`: provider adapters
+- `src/loop_agent/ops/`: provider doctor, git, and GitHub operational helpers
 - `src/loop_agent/tool_use_loop.py`: the central model -> tools -> results loop
+- `src/loop_agent/ui/`: optional chat-oriented TUI entrypoints
 - `tests/`: unit tests
 - `examples/`: optional demos and integrations
 - `bin/loopagent.js`: npm bridge entrypoint

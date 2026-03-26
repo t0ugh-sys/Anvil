@@ -18,6 +18,8 @@ from . import worktree_manager
 from . import context_schema
 from . import scheduler
 from . import tool_use_loop
+from . import ops
+from . import ui
 
 __all__ = [
     'LoopAgent',
@@ -46,4 +48,6 @@ __all__ = [
     'context_schema',
     'scheduler',
     'tool_use_loop',
+    'ops',
+    'ui',
 ]
