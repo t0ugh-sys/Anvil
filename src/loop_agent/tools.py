@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 from .agent_protocol import ToolCall, ToolResult
+from .compression import CompactManager
 from .policies import ToolPolicy
 from .todo import render_todo_lines
 
@@ -22,6 +23,7 @@ class ToolContext:
     policy: ToolPolicy = ToolPolicy.allow_all()
     todo_manager: Any = None
     skill_loader: Any = None
+    compact_manager: CompactManager | None = None
 
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
@@ -482,6 +484,20 @@ def load_skill_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
     return ToolResult(id=call_id, ok=True, output=f'<skill name=\"{name}\">\n{body}\n</skill>')
 
 
+def compact_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
+    call_id = str(args.get('id', 'compact'))
+    manager = context.compact_manager
+    if manager is None:
+        return ToolResult(id=call_id, ok=False, output='', error='compact manager is not configured')
+
+    reason = str(args.get('reason', '')).strip()
+    manager.request(reason)
+    message = 'compaction requested'
+    if reason:
+        message += f': {reason}'
+    return ToolResult(id=call_id, ok=True, output=message, error=None)
+
+
 def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: ToolFn) -> ToolDispatchMap:
     dispatch_map[name] = handler
     return dispatch_map
@@ -497,6 +513,7 @@ def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolD
 def _builtin_core_tool_registrations() -> List[ToolRegistration]:
     return [
         ('load_skill', load_skill_tool),
+        ('compact', compact_tool),
         ('todo_write', todo_write_tool),
         ('read_file', read_file_tool),
         ('write_file', write_file_tool),

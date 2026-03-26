@@ -5,6 +5,15 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .agent_protocol import ToolResult, parse_agent_step, render_agent_step_schema
+from .compression import (
+    CompactManager,
+    CompressionConfig,
+    TranscriptEntry,
+    archive_transcript,
+    estimate_tokens,
+    micro_compact_entries,
+    summarize_entries_deterministically,
+)
 from .core.types import StepContext, StepResult
 from .policies import ToolPolicy
 from .task_graph import TaskGraph, TaskStatus
@@ -19,6 +28,7 @@ except ImportError:  # pragma: no cover
 
 
 DeciderFn = Callable[[str, Tuple[str, ...], Tuple[ToolResult, ...], Dict[str, object], Tuple[str, ...]], str]
+SummarizerFn = Callable[[str, str, Tuple[TranscriptEntry, ...]], str]
 
 
 @dataclass(frozen=True)
@@ -27,6 +37,11 @@ class ToolUseState:
     tool_results: Tuple[ToolResult, ...] = tuple()
     todos: Tuple[TodoItem, ...] = tuple()
     rounds_since_todo_update: int = 0
+    transcript: Tuple[TranscriptEntry, ...] = tuple()
+    compact_summary: str = ''
+    compaction_count: int = 0
+    archived_transcripts: Tuple[str, ...] = tuple()
+    last_compaction_reason: str = ''
 
 
 def build_tool_dispatch(
@@ -135,10 +150,25 @@ def _augment_state_summary(
     nag_after_rounds: int,
     skills: Optional['SkillLoader'] = None,
     task_store: TaskStore | None = None,
+    compression_config: CompressionConfig | None = None,
 ) -> Dict[str, object]:
     summary = dict(context.state_summary)
     summary['todo_state'] = _build_todo_state_summary(context.state, nag_after_rounds=nag_after_rounds)
     summary['task_state'] = _build_task_state_summary(task_store)
+    config = compression_config or CompressionConfig()
+    summary['compression_state'] = {
+        'summary': context.state.compact_summary,
+        'compaction_count': context.state.compaction_count,
+        'archived_transcripts': list(context.state.archived_transcripts[-5:]),
+        'recent_transcript': [
+            entry.render_line()
+            for entry in context.state.transcript[-config.recent_transcript_entries :]
+        ],
+        'estimated_tokens': estimate_tokens(
+            [context.state.compact_summary, *[entry.content for entry in context.state.transcript]]
+        ),
+        'last_compaction_reason': context.state.last_compaction_reason,
+    }
     reminder = summary['todo_state'].get('reminder')
     if reminder:
         summary['todo_reminder'] = reminder
@@ -199,6 +229,100 @@ def _build_round_metadata(
     }
 
 
+def _append_transcript_entries(
+    state: ToolUseState,
+    *,
+    thought: str,
+    tool_calls,
+    tool_results: List[ToolResult],
+) -> Tuple[TranscriptEntry, ...]:
+    entries = list(state.transcript)
+    entries.append(TranscriptEntry(kind='thought', content=thought))
+    for call, result in zip(tool_calls, tool_results):
+        content = result.output if result.ok else (result.error or result.output or 'tool error')
+        entries.append(
+            TranscriptEntry(
+                kind='tool_result',
+                content=content[:4000],
+                tool_name=call.name,
+                call_id=result.id,
+                ok=result.ok,
+            )
+        )
+    return tuple(entries)
+
+
+def _compact_state_if_needed(
+    *,
+    goal: str,
+    state: ToolUseState,
+    transcripts_dir: Path | None,
+    summarizer: SummarizerFn | None,
+    compression_config: CompressionConfig,
+    compact_manager: CompactManager,
+) -> ToolUseState:
+    compacted_transcript = micro_compact_entries(
+        state.transcript,
+        keep_last_results=compression_config.micro_keep_last_results,
+    )
+    next_state = ToolUseState(
+        history=state.history,
+        tool_results=state.tool_results,
+        todos=state.todos,
+        rounds_since_todo_update=state.rounds_since_todo_update,
+        transcript=compacted_transcript,
+        compact_summary=state.compact_summary,
+        compaction_count=state.compaction_count,
+        archived_transcripts=state.archived_transcripts,
+        last_compaction_reason=state.last_compaction_reason,
+    )
+
+    estimated_tokens = estimate_tokens(
+        [next_state.compact_summary, *[entry.content for entry in next_state.transcript]]
+    )
+    reason = ''
+    if compact_manager.requested:
+        reason = compact_manager.reason or 'manual'
+    elif estimated_tokens > compression_config.max_context_tokens:
+        reason = f'auto:{estimated_tokens}>{compression_config.max_context_tokens}'
+
+    if not reason:
+        return next_state
+
+    archived_transcripts = list(next_state.archived_transcripts)
+    if transcripts_dir is not None:
+        archive_path = archive_transcript(
+            transcripts_dir=transcripts_dir,
+            compaction_index=next_state.compaction_count + 1,
+            reason=reason,
+            goal=goal,
+            previous_summary=next_state.compact_summary,
+            entries=next_state.transcript,
+        )
+        archived_transcripts.append(str(archive_path))
+
+    summary = (
+        summarizer(goal, next_state.compact_summary, next_state.transcript)
+        if summarizer is not None
+        else summarize_entries_deterministically(
+            goal=goal,
+            previous_summary=next_state.compact_summary,
+            entries=next_state.transcript,
+        )
+    )
+    return ToolUseState(
+        history=next_state.history,
+        tool_results=next_state.tool_results,
+        todos=next_state.todos,
+        rounds_since_todo_update=next_state.rounds_since_todo_update,
+        transcript=(TranscriptEntry(kind='summary', content=summary),),
+        compact_summary=summary,
+        compaction_count=next_state.compaction_count + 1,
+        archived_transcripts=tuple(archived_transcripts),
+        last_compaction_reason=reason,
+    )
+
+
 def execute_tool_use_round(
     *,
     decider: DeciderFn,
@@ -208,12 +332,18 @@ def execute_tool_use_round(
     nag_after_rounds: int = 3,
     skills: Optional['SkillLoader'] = None,
     task_store: TaskStore | None = None,
+    compression_config: CompressionConfig | None = None,
+    transcripts_dir: Path | None = None,
+    summarizer: SummarizerFn | None = None,
 ) -> StepResult[ToolUseState]:
+    config = compression_config or CompressionConfig()
+    config.validate()
     augmented_state_summary = _augment_state_summary(
         context,
         nag_after_rounds=nag_after_rounds,
         skills=skills,
         task_store=task_store,
+        compression_config=config,
     )
     todo_manager = TodoManager(
         TodoSnapshot(
@@ -226,6 +356,7 @@ def execute_tool_use_round(
         policy=tool_context.policy,
         todo_manager=todo_manager,
         skill_loader=skills,
+        compact_manager=CompactManager(),
     )
     raw = _decide_next_step(decider, context, augmented_state_summary)
     parsed = parse_agent_step(raw)
@@ -248,13 +379,33 @@ def execute_tool_use_round(
         thought=parsed.thought,
         tool_results=executed,
     )
+    updated_transcript = _append_transcript_entries(
+        context.state,
+        thought=parsed.thought,
+        tool_calls=parsed.tool_calls,
+        tool_results=executed,
+    )
     todo_snapshot = todo_manager.snapshot(previous_rounds_since_update=context.state.rounds_since_todo_update)
-    new_state = ToolUseState(
+    draft_state = ToolUseState(
         history=updated_history,
         tool_results=tuple(executed),
         todos=todo_snapshot.items,
         rounds_since_todo_update=todo_snapshot.rounds_since_update,
+        transcript=updated_transcript,
+        compact_summary=context.state.compact_summary,
+        compaction_count=context.state.compaction_count,
+        archived_transcripts=context.state.archived_transcripts,
+        last_compaction_reason=context.state.last_compaction_reason,
     )
+    compacted_state = _compact_state_if_needed(
+        goal=context.goal,
+        state=draft_state,
+        transcripts_dir=transcripts_dir,
+        summarizer=summarizer,
+        compression_config=config,
+        compact_manager=tool_context.compact_manager or CompactManager(),
+    )
+    new_state = compacted_state
     metadata = _build_round_metadata(
         context=context,
         state_summary=augmented_state_summary,
@@ -264,6 +415,13 @@ def execute_tool_use_round(
         tool_results=executed,
     )
     metadata['todo_state'] = _build_todo_state_summary(new_state, nag_after_rounds=nag_after_rounds)
+    metadata['compression_state'] = {
+        'summary': new_state.compact_summary,
+        'compaction_count': new_state.compaction_count,
+        'archived_transcripts': list(new_state.archived_transcripts[-5:]),
+        'recent_transcript': [entry.render_line() for entry in new_state.transcript[-config.recent_transcript_entries :]],
+        'last_compaction_reason': new_state.last_compaction_reason,
+    }
     if not metadata['has_tool_calls']:
         final = parsed.final or parsed.thought or 'done'
         return StepResult(output=final, state=new_state, done=True, metadata=metadata)
@@ -279,6 +437,9 @@ def make_tool_use_step(
     extra_tools: Optional[ToolDispatchMap] = None,
     todo_nag_after_rounds: int = 3,
     task_store: TaskStore | None = None,
+    compression_config: CompressionConfig | None = None,
+    transcripts_dir: Path | None = None,
+    summarizer: SummarizerFn | None = None,
 ) -> Callable[[StepContext[ToolUseState]], StepResult[ToolUseState]]:
     dispatch_map = build_tool_dispatch(skills=skills, extra_tools=extra_tools)
     tool_context = ToolContext(workspace_root=workspace_root, policy=policy)
@@ -292,6 +453,9 @@ def make_tool_use_step(
             nag_after_rounds=todo_nag_after_rounds,
             skills=skills,
             task_store=task_store,
+            compression_config=compression_config,
+            transcripts_dir=transcripts_dir,
+            summarizer=summarizer,
         )
 
     return step

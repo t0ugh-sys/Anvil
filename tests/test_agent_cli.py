@@ -128,6 +128,14 @@ class AgentCliTests(unittest.TestCase):
                 '--include-history',
                 '--tasks-dir',
                 '.tasks-dev',
+                '--transcripts-dir',
+                '.transcripts-dev',
+                '--max-context-tokens',
+                '2048',
+                '--micro-compact-keep',
+                '4',
+                '--recent-transcript-entries',
+                '6',
             ]
         )
         self.assertEqual(args.memory_dir, 'mem')
@@ -137,6 +145,10 @@ class AgentCliTests(unittest.TestCase):
         self.assertFalse(args.record_run)
         self.assertTrue(args.include_history)
         self.assertEqual(args.tasks_dir, '.tasks-dev')
+        self.assertEqual(args.transcripts_dir, '.transcripts-dev')
+        self.assertEqual(args.max_context_tokens, 2048)
+        self.assertEqual(args.micro_compact_keep, 4)
+        self.assertEqual(args.recent_transcript_entries, 6)
 
     def test_should_record_structured_tool_events(self) -> None:
         parser = build_parser()

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .agent_protocol import render_agent_step_schema
 from .coding_agent import run_coding_agent
+from .compression import CompressionConfig, summarize_entries_deterministically
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, StopConfig
 from .llm.providers import build_invoke_from_args
@@ -69,6 +70,31 @@ def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None =
     return decider
 
 
+def _build_coding_summarizer(args: argparse.Namespace):
+    if str(args.provider) == 'mock':
+        return None
+
+    invoke = build_invoke_from_args(args, mode='coding')
+
+    def summarizer(goal: str, previous_summary: str, transcript) -> str:
+        transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
+        prompt = (
+            'Summarize the coding-agent conversation for long-running context compression.\n'
+            'Return plain text only.\n'
+            'Keep: user goal, constraints, files changed, tool outcomes, unfinished work.\n'
+            f'Goal:\n{goal}\n'
+            f'Previous summary:\n{previous_summary or "none"}\n'
+            'Recent transcript:\n'
+            + '\n'.join(transcript_lines)
+        )
+        response = invoke(prompt).strip()
+        if response:
+            return response
+        return summarize_entries_deterministically(goal=goal, previous_summary=previous_summary, entries=transcript)
+
+    return summarizer
+
+
 def _load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
     """Load skills from command-line arguments."""
     skills_arg = getattr(args, 'skills', None)
@@ -113,6 +139,12 @@ def _run_code_command(args: argparse.Namespace) -> int:
     goal = _resolve_goal(args)
     workspace_root = Path(args.workspace).resolve()
     task_store = TaskStore((workspace_root / args.tasks_dir).resolve()) if args.tasks_dir else None
+    compression_config = CompressionConfig(
+        micro_keep_last_results=args.micro_compact_keep,
+        max_context_tokens=args.max_context_tokens,
+        recent_transcript_entries=args.recent_transcript_entries,
+    )
+    transcripts_dir = (workspace_root / args.transcripts_dir).resolve() if args.transcripts_dir else None
     run_id = args.run_id or _default_run_id()
     memory_run_dir = Path(args.memory_dir) / run_id
     memory_store = JsonlMemoryStore(memory_dir=memory_run_dir, summarize_every=args.summarize_every)
@@ -134,6 +166,7 @@ def _run_code_command(args: argparse.Namespace) -> int:
 
     skills = _load_skills_from_args(args)
     decider = _build_coding_decider(args, skills)
+    summarizer = _build_coding_summarizer(args)
     result = run_coding_agent(
         goal=goal,
         decider=decider,
@@ -143,6 +176,9 @@ def _run_code_command(args: argparse.Namespace) -> int:
         context_provider=context_provider,
         skills=skills,
         task_store=task_store,
+        compression_config=compression_config,
+        transcripts_dir=transcripts_dir,
+        summarizer=summarizer,
     )
     memory_store.on_event(
         'run_finished',
@@ -287,6 +323,10 @@ def build_parser() -> argparse.ArgumentParser:
     memory_group.add_argument('--no-record-run', action='store_false', dest='record_run')
     memory_group.add_argument('--runs-dir', default='.loopagent/runs', help='Directory for structured run artifacts')
     memory_group.add_argument('--tasks-dir', default='.tasks', help='Workspace-relative task graph directory injected into context')
+    memory_group.add_argument('--transcripts-dir', default='.transcripts', help='Workspace-relative archive directory for compacted transcripts')
+    memory_group.add_argument('--max-context-tokens', type=int, default=50000, help='Auto-compact when estimated context exceeds this budget')
+    memory_group.add_argument('--micro-compact-keep', type=int, default=3, help='Keep full content for the most recent N tool results')
+    memory_group.add_argument('--recent-transcript-entries', type=int, default=8, help='Expose the most recent compacted transcript entries in state summary')
 
     tool_group = code.add_argument_group('tool dispatch')
     tool_group.add_argument(

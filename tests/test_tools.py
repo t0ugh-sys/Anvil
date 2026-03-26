@@ -27,6 +27,7 @@ class ToolsTests(unittest.TestCase):
         dispatch = build_default_tools()
 
         self.assertIn('read_file', names)
+        self.assertIn('compact', names)
         self.assertIn('todo_write', names)
         self.assertIn('load_skill', names)
         self.assertIn('git_status', names)
