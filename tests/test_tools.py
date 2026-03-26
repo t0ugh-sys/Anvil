@@ -12,6 +12,7 @@ from loop_agent.agent_protocol import ToolCall
 from loop_agent.tools import (
     ToolContext,
     build_default_tools,
+    builtin_tool_registrations,
     execute_tool_call,
     fetch_url_tool,
     register_tool_handler,
@@ -19,6 +20,16 @@ from loop_agent.tools import (
 
 
 class ToolsTests(unittest.TestCase):
+    def test_should_build_dispatch_from_builtin_registrations(self) -> None:
+        registrations = builtin_tool_registrations()
+        names = [name for name, _ in registrations]
+        dispatch = build_default_tools()
+
+        self.assertIn('read_file', names)
+        self.assertIn('git_status', names)
+        self.assertIn('gh_issue_list', names)
+        self.assertEqual(set(names), set(dispatch.keys()))
+
     def test_should_register_custom_tool_handler_in_dispatch_map(self) -> None:
         def echo_tool(context: ToolContext, args):
             return type('Result', (), {})  # pragma: no cover

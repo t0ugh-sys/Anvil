@@ -23,6 +23,7 @@ class ToolContext:
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
 ToolDispatchMap = Dict[str, ToolFn]
+ToolRegistration = Tuple[str, ToolFn]
 
 
 _SEARCH_SKIP_DIRS = {
@@ -446,17 +447,27 @@ def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: Too
     return dispatch_map
 
 
-def _build_tool_dispatch_map(registrations: Iterable[Tuple[str, ToolFn]]) -> ToolDispatchMap:
+def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolDispatchMap:
     dispatch_map: ToolDispatchMap = {}
     for name, handler in registrations:
         register_tool_handler(dispatch_map, name, handler)
     return dispatch_map
 
 
-def build_default_tools() -> ToolDispatchMap:
-    # Keep tool names stable; they become part of the agent's contract.
-    # Harness boundary: to expose a new tool to the model, add one handler and
-    # register it in this dispatch map. The loop itself does not need changes.
+def _builtin_core_tool_registrations() -> List[ToolRegistration]:
+    return [
+        ('read_file', read_file_tool),
+        ('write_file', write_file_tool),
+        ('apply_patch', apply_patch_tool),
+        ('search', search_tool),
+        ('run_command', run_command_tool),
+        ('web_search', web_search_tool),
+        ('fetch_url', fetch_url_tool),
+        ('analyze_memory', analyze_memory_tool),
+    ]
+
+
+def _builtin_git_tool_registrations() -> List[ToolRegistration]:
     from .ops.git_tools import (
         git_branch_list_tool,
         git_checkout_tool,
@@ -466,6 +477,19 @@ def build_default_tools() -> ToolDispatchMap:
         git_push_tool,
         git_status_tool,
     )
+
+    return [
+        ('git_status', git_status_tool),
+        ('git_branch_list', git_branch_list_tool),
+        ('git_checkout', git_checkout_tool),
+        ('git_pull', git_pull_tool),
+        ('git_merge', git_merge_tool),
+        ('git_merge_and_push', git_merge_and_push_tool),
+        ('git_push', git_push_tool),
+    ]
+
+
+def _builtin_github_tool_registrations() -> List[ToolRegistration]:
     from .ops.github_tools import (
         gh_auth_status_tool,
         gh_issue_close_tool,
@@ -482,24 +506,7 @@ def build_default_tools() -> ToolDispatchMap:
         gh_repo_list_tool,
     )
 
-    registrations: List[Tuple[str, ToolFn]] = [
-        ('read_file', read_file_tool),
-        ('write_file', write_file_tool),
-        ('apply_patch', apply_patch_tool),
-        ('search', search_tool),
-        ('run_command', run_command_tool),
-        ('web_search', web_search_tool),
-        ('fetch_url', fetch_url_tool),
-        ('analyze_memory', analyze_memory_tool),
-        # Git
-        ('git_status', git_status_tool),
-        ('git_branch_list', git_branch_list_tool),
-        ('git_checkout', git_checkout_tool),
-        ('git_pull', git_pull_tool),
-        ('git_merge', git_merge_tool),
-        ('git_merge_and_push', git_merge_and_push_tool),
-        ('git_push', git_push_tool),
-        # GitHub (via gh CLI)
+    return [
         ('gh_auth_status', gh_auth_status_tool),
         ('gh_repo_list', gh_repo_list_tool),
         ('gh_repo_create', gh_repo_create_tool),
@@ -514,6 +521,20 @@ def build_default_tools() -> ToolDispatchMap:
         ('gh_pr_comment', gh_pr_comment_tool),
         ('gh_pr_merge', gh_pr_merge_tool),
     ]
+
+
+def builtin_tool_registrations() -> List[ToolRegistration]:
+    # Keep tool names stable; they are part of the model <-> harness contract.
+    # To add a new tool, register one more handler here. The loop itself stays unchanged.
+    registrations: List[ToolRegistration] = []
+    registrations.extend(_builtin_core_tool_registrations())
+    registrations.extend(_builtin_git_tool_registrations())
+    registrations.extend(_builtin_github_tool_registrations())
+    return registrations
+
+
+def build_default_tools() -> ToolDispatchMap:
+    return _build_tool_dispatch_map(builtin_tool_registrations())
     return _build_tool_dispatch_map(registrations)
 
 

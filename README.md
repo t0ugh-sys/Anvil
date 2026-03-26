@@ -12,6 +12,23 @@ while model_is_calling_tools:
 Everything else in the project layers on top of that loop: policy, memory, hooks,
 task graphs, subagents, worktree isolation, and scheduling.
 
+The loop itself does not change when tools grow. We only extend the tool array and
+dispatch map:
+
+```text
++----------+      +-------+      +------------------+
+|   User   | ---> |  LLM  | ---> | Tool Dispatch    |
+|  prompt  |      |       |      | {                |
++----------+      +---+---+      |   bash: run_bash |
+                     ^          |   read: run_read |
+                     |          |   write: run_wr  |
+                     +----------+   edit: run_edit |
+                     tool_result| }                |
+                                +------------------+
+```
+
+Key rule: the loop stays stable; tools and routing evolve independently.
+
 ## Highlights
 
 - Tool-use feedback loop as the primary runtime model
@@ -203,6 +220,7 @@ python -m loop_agent.agent_cli code --goal "search for info" --skill web_search 
 - `src/loop_agent/llm/`: provider adapters
 - `src/loop_agent/ops/`: provider doctor, git, and GitHub operational helpers
 - `src/loop_agent/tool_use_loop.py`: the central model -> tools -> results loop
+- `src/loop_agent/tools.py`: builtin tool registry, dispatch map, and execution boundary
 - `src/loop_agent/ui/`: optional chat-oriented TUI entrypoints
 - `tests/`: unit tests
 - `examples/`: optional demos and integrations
