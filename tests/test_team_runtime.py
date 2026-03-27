@@ -193,22 +193,53 @@ class TeamRuntimeTests(unittest.TestCase):
             for _ in range(40):
                 time.sleep(0.05)
                 graph = runtime.load_task_graph()
-                if graph.get_task('t1').status == TaskStatus.completed:
+                if graph.get_task('t2').status == TaskStatus.completed:
                     break
-            self.assertEqual(runtime.load_task_graph().get_task('t1').status, TaskStatus.completed)
+            final_graph = runtime.load_task_graph()
+            self.assertEqual(final_graph.get_task('t1').status, TaskStatus.completed)
+            self.assertEqual(final_graph.get_task('t2').status, TaskStatus.completed)
+            self.assertEqual(final_graph.get_task('t1').assignee, 'alice')
+            self.assertEqual(final_graph.get_task('t2').assignee, 'bob')
+        finally:
+            if runtime is not None:
+                runtime.shutdown_all()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            assigned_second = runtime.dispatch_ready_tasks(sender='lead')
-            self.assertEqual(assigned_second, ('t2',))
+    def test_should_continue_dispatching_ready_tasks_after_completion(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'team-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        runtime = None
+        try:
+            runtime = PersistentTeamRuntime(tmp_dir / '.team')
+            runtime.spawn_teammate(
+                PersistentTeammateSpec(
+                    name='alice',
+                    role='coder',
+                    workspace_root=tmp_dir,
+                    decider=_build_mock_decider('alice'),
+                )
+            )
+            runtime.replace_task_graph(
+                [
+                    Task(id='t1', title='Inspect', goal='inspect README'),
+                    Task(id='t2', title='Patch', goal='patch README'),
+                ]
+            )
 
-            for _ in range(40):
+            assigned = runtime.dispatch_ready_tasks(sender='lead')
+            self.assertEqual(assigned, ('t1',))
+
+            for _ in range(60):
                 time.sleep(0.05)
                 graph = runtime.load_task_graph()
                 if graph.get_task('t2').status == TaskStatus.completed:
                     break
+
             final_graph = runtime.load_task_graph()
+            self.assertEqual(final_graph.get_task('t1').status, TaskStatus.completed)
             self.assertEqual(final_graph.get_task('t2').status, TaskStatus.completed)
             self.assertEqual(final_graph.get_task('t1').assignee, 'alice')
-            self.assertEqual(final_graph.get_task('t2').assignee, 'bob')
+            self.assertEqual(final_graph.get_task('t2').assignee, 'alice')
         finally:
             if runtime is not None:
                 runtime.shutdown_all()

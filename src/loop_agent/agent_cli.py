@@ -270,6 +270,7 @@ def _run_team_run_command(args: argparse.Namespace) -> int:
         runtime.dispatch_ready_tasks(sender=args.sender)
 
     expected_replies = 0
+    task_mode = bool(args.task)
     for item in args.message:
         recipient, body = _parse_team_message(item)
         runtime.send_message(recipient, body, sender=args.sender)
@@ -285,9 +286,10 @@ def _run_team_run_command(args: argparse.Namespace) -> int:
             inbox = runtime.inbox_store.drain(args.sender)
             for item in inbox:
                 replies.append(item.to_dict())
-            if expected_replies > 0 and len(replies) >= expected_replies:
+            tasks_still_active = task_mode and runtime.has_active_tasks()
+            if expected_replies > 0 and len(replies) >= expected_replies and not tasks_still_active:
                 break
-            if expected_replies == 0:
+            if expected_replies == 0 and not tasks_still_active:
                 break
             time.sleep(args.poll_interval_s)
     finally:
@@ -297,6 +299,7 @@ def _run_team_run_command(args: argparse.Namespace) -> int:
         'team_dir': str(team_root),
         'members': [member.to_dict() for member in runtime.config_store.load().members],
         'replies': replies,
+        'tasks': runtime.load_task_graph().to_dict().get('tasks', []),
     }
     if args.output == 'json':
         print(json.dumps(payload, ensure_ascii=False))

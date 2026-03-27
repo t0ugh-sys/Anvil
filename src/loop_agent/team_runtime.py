@@ -120,22 +120,23 @@ class TeamConfigStore:
         self.root_dir = root_dir
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.root_dir / 'config.json'
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         if not self.config_file.exists():
             self.save(TeamConfig())
 
     def load(self) -> TeamConfig:
-        if not self.config_file.exists():
-            return TeamConfig()
-        payload = json.loads(self.config_file.read_text(encoding='utf-8'))
-        return TeamConfig.from_dict(payload if isinstance(payload, dict) else {})
+        with self._lock:
+            if not self.config_file.exists():
+                return TeamConfig()
+            text = self.config_file.read_text(encoding='utf-8').strip()
+            if not text:
+                return TeamConfig()
+            payload = json.loads(text)
+            return TeamConfig.from_dict(payload if isinstance(payload, dict) else {})
 
     def save(self, config: TeamConfig) -> None:
         with self._lock:
-            self.config_file.write_text(
-                json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
-                encoding='utf-8',
-            )
+            self._write_config(config)
 
     def upsert_member(self, member: TeamMember) -> TeamConfig:
         with self._lock:
@@ -143,10 +144,7 @@ class TeamConfigStore:
             members = {item.name: item for item in config.members}
             members[member.name] = member
             updated = TeamConfig(team_name=config.team_name, members=tuple(sorted(members.values(), key=lambda item: item.name)))
-            self.config_file.write_text(
-                json.dumps(updated.to_dict(), ensure_ascii=False, indent=2),
-                encoding='utf-8',
-            )
+            self._write_config(updated)
             return updated
 
     def update_member_status(self, name: str, status: str) -> TeamConfig:
@@ -164,6 +162,14 @@ class TeamConfigStore:
         updated = TeamConfig(team_name=config.team_name, members=tuple(members))
         self.save(updated)
         return updated
+
+    def _write_config(self, config: TeamConfig) -> None:
+        temp_file = self.config_file.with_suffix(f'{self.config_file.suffix}.tmp')
+        temp_file.write_text(
+            json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )
+        temp_file.replace(self.config_file)
 
     def member_names(self) -> Tuple[str, ...]:
         return tuple(member.name for member in self.load().members)
@@ -327,6 +333,10 @@ class PersistentTeamRuntime:
     def load_task_graph(self) -> TaskGraph:
         return self.task_store.load_graph()
 
+    def has_active_tasks(self) -> bool:
+        graph = self.task_store.load_graph()
+        return any(task.status in {TaskStatus.pending, TaskStatus.ready, TaskStatus.running} for task in graph.tasks())
+
     def dispatch_ready_tasks(self, *, sender: str = 'lead') -> Tuple[str, ...]:
         with self._lock:
             try:
@@ -427,6 +437,7 @@ class PersistentTeamRuntime:
                     )
                 )
                 self.config_store.update_member_status(spec.name, 'idle')
+                self.dispatch_ready_tasks(sender='scheduler')
 
     def _complete_task(self, task_id: str, teammate_name: str, done: bool, result) -> None:
         with self._lock:

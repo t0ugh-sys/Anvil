@@ -296,6 +296,8 @@ class AgentCliTests(unittest.TestCase):
                     'alice:coder',
                     '--task',
                     'inspect README',
+                    '--task',
+                    'patch README',
                     '--provider',
                     'mock',
                     '--model',
@@ -306,11 +308,19 @@ class AgentCliTests(unittest.TestCase):
                     '2',
                 ]
             )
-            with patch('sys.stdout'):
+            with patch('sys.stdout') as stdout:
                 exit_code = args.handler(args)
             self.assertEqual(exit_code, 0)
             tasks_dir = tmp_dir / '.team' / 'tasks'
             self.assertTrue((tasks_dir / 'task_task_1.json').exists())
+            self.assertTrue((tasks_dir / 'task_task_2.json').exists())
+            first_task = json.loads((tasks_dir / 'task_task_1.json').read_text(encoding='utf-8'))
+            second_task = json.loads((tasks_dir / 'task_task_2.json').read_text(encoding='utf-8'))
+            self.assertEqual(first_task['status'], 'completed')
+            self.assertEqual(second_task['status'], 'completed')
+            output_text = ''.join(call.args[0] for call in stdout.write.call_args_list if call.args)
+            payload = json.loads(output_text)
+            self.assertEqual(len(payload['tasks']), 2)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
