@@ -223,6 +223,15 @@ class JsonlTeamInboxStore:
                     rows.append(TeamMessage.from_dict(payload))
         return tuple(rows)
 
+    def has_messages(self, recipient: str) -> bool:
+        path = self.inbox_file(recipient)
+        if not path.exists():
+            return False
+        for line in path.read_text(encoding='utf-8').splitlines():
+            if line.strip():
+                return True
+        return False
+
 
 @dataclass(frozen=True)
 class PersistentTeammateSpec:
@@ -333,9 +342,26 @@ class PersistentTeamRuntime:
     def load_task_graph(self) -> TaskGraph:
         return self.task_store.load_graph()
 
+    def add_task(self, task: Task) -> TaskGraph:
+        with self._lock:
+            graph = self.task_store.load_graph()
+            graph.add_task(task)
+            self.task_store.save_graph(graph)
+            return graph
+
     def has_active_tasks(self) -> bool:
         graph = self.task_store.load_graph()
         return any(task.status in {TaskStatus.pending, TaskStatus.ready, TaskStatus.running} for task in graph.tasks())
+
+    def has_pending_member_messages(self) -> bool:
+        for recipient in self.config_store.member_names():
+            if self.inbox_store.has_messages(recipient):
+                return True
+        return False
+
+    def all_teammates_shutdown(self) -> bool:
+        members = self.config_store.load().members
+        return bool(members) and all(member.status == 'shutdown' for member in members)
 
     def dispatch_ready_tasks(self, *, sender: str = 'lead') -> Tuple[str, ...]:
         with self._lock:
