@@ -19,6 +19,7 @@ from .memory.jsonl_store import JsonlMemoryStore
 from .ops.doctor import format_doctor_report, run_provider_doctor
 from .run_recorder import RunRecorder
 from .skills import SkillLoader, list_skills, get_skill
+from .task_graph import Task
 from .task_store import TaskStore
 from .team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
 from .tools import build_default_tools
@@ -259,6 +260,15 @@ def _run_team_run_command(args: argparse.Namespace) -> int:
     for spec in teammate_specs:
         runtime.spawn_teammate(spec)
 
+    if args.task:
+        runtime.replace_task_graph(
+            [
+                Task(id=f'task_{index}', title=body, goal=body)
+                for index, body in enumerate(args.task, start=1)
+            ]
+        )
+        runtime.dispatch_ready_tasks(sender=args.sender)
+
     expected_replies = 0
     for item in args.message:
         recipient, body = _parse_team_message(item)
@@ -490,6 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     team_run.add_argument('--teammate', action='append', default=[], required=True, help='Teammate in NAME:ROLE format')
     team_run.add_argument('--message', action='append', default=[], help='Send startup message TARGET=BODY')
     team_run.add_argument('--broadcast', action='append', default=[], help='Broadcast startup message to all teammates')
+    team_run.add_argument('--task', action='append', default=[], help='Create and dispatch one task goal per entry')
     team_run.add_argument('--sender', default='lead')
     team_run.add_argument('--service-timeout-s', type=float, default=5.0)
     team_run.add_argument('--poll-interval-s', type=float, default=0.05)

@@ -13,6 +13,7 @@ from loop_agent.team_runtime import (
     PersistentTeammateSpec,
     TeamMessageType,
 )
+from loop_agent.task_graph import Task, TaskStatus
 
 
 def _build_mock_decider(prefix: str):
@@ -152,6 +153,62 @@ class TeamRuntimeTests(unittest.TestCase):
                     self.assertEqual(runtime.teammate_status('alice'), 'shutdown')
                     return
             self.fail('expected shutdown response from alice')
+        finally:
+            if runtime is not None:
+                runtime.shutdown_all()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_dispatch_ready_tasks_to_idle_teammates(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'team-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        runtime = None
+        try:
+            runtime = PersistentTeamRuntime(tmp_dir / '.team')
+            runtime.spawn_teammate(
+                PersistentTeammateSpec(
+                    name='alice',
+                    role='coder',
+                    workspace_root=tmp_dir,
+                    decider=_build_mock_decider('alice'),
+                )
+            )
+            runtime.spawn_teammate(
+                PersistentTeammateSpec(
+                    name='bob',
+                    role='reviewer',
+                    workspace_root=tmp_dir,
+                    decider=_build_mock_decider('bob'),
+                )
+            )
+            runtime.replace_task_graph(
+                [
+                    Task(id='t1', title='Inspect', goal='inspect README', metadata={'role': 'coder'}),
+                    Task(id='t2', title='Review', goal='review README', dependencies=('t1',), metadata={'role': 'reviewer'}),
+                ]
+            )
+
+            assigned = runtime.dispatch_ready_tasks(sender='lead')
+            self.assertEqual(assigned, ('t1',))
+
+            for _ in range(40):
+                time.sleep(0.05)
+                graph = runtime.load_task_graph()
+                if graph.get_task('t1').status == TaskStatus.completed:
+                    break
+            self.assertEqual(runtime.load_task_graph().get_task('t1').status, TaskStatus.completed)
+
+            assigned_second = runtime.dispatch_ready_tasks(sender='lead')
+            self.assertEqual(assigned_second, ('t2',))
+
+            for _ in range(40):
+                time.sleep(0.05)
+                graph = runtime.load_task_graph()
+                if graph.get_task('t2').status == TaskStatus.completed:
+                    break
+            final_graph = runtime.load_task_graph()
+            self.assertEqual(final_graph.get_task('t2').status, TaskStatus.completed)
+            self.assertEqual(final_graph.get_task('t1').assignee, 'alice')
+            self.assertEqual(final_graph.get_task('t2').assignee, 'bob')
         finally:
             if runtime is not None:
                 runtime.shutdown_all()

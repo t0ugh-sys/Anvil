@@ -280,6 +280,40 @@ class AgentCliTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_should_run_team_tasks_with_mock_provider(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'team-cli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            args = parser.parse_args(
+                [
+                    'team',
+                    'run',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--teammate',
+                    'alice:coder',
+                    '--task',
+                    'inspect README',
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--output',
+                    'json',
+                    '--service-timeout-s',
+                    '2',
+                ]
+            )
+            with patch('sys.stdout'):
+                exit_code = args.handler(args)
+            self.assertEqual(exit_code, 0)
+            tasks_dir = tmp_dir / '.team' / 'tasks'
+            self.assertTrue((tasks_dir / 'task_task_1.json').exists())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 if __name__ == '__main__':
     unittest.main()

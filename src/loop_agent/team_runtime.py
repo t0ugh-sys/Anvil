@@ -15,6 +15,8 @@ from .core.serialization import run_result_to_dict
 from .core.types import StopConfig
 from .policies import ToolPolicy
 from .skills import SkillLoader
+from .task_graph import Task, TaskGraph, TaskStatus
+from .task_store import TaskStore
 
 
 def _utc_now() -> str:
@@ -234,6 +236,7 @@ class PersistentTeamRuntime:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.config_store = TeamConfigStore(self.root_dir)
         self.inbox_store = JsonlTeamInboxStore(self.root_dir / 'inbox')
+        self.task_store = TaskStore(self.root_dir / 'tasks')
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_events: Dict[str, threading.Event] = {}
         self._specs: Dict[str, PersistentTeammateSpec] = {}
@@ -318,6 +321,59 @@ class PersistentTeamRuntime:
                 return member.status
         raise ValueError(f'unknown teammate: {name}')
 
+    def replace_task_graph(self, tasks: Iterable[Task]) -> TaskGraph:
+        return self.task_store.replace_graph(tasks)
+
+    def load_task_graph(self) -> TaskGraph:
+        return self.task_store.load_graph()
+
+    def dispatch_ready_tasks(self, *, sender: str = 'lead') -> Tuple[str, ...]:
+        with self._lock:
+            try:
+                graph = self.task_store.load_graph()
+            except Exception:
+                return tuple()
+            if not graph.tasks():
+                return tuple()
+
+            members = {
+                member.name: member
+                for member in self.config_store.load().members
+                if member.status == 'idle'
+            }
+            assigned: list[str] = []
+            for task in graph.ready_tasks():
+                teammate_name = self._pick_teammate_for_task(task, members)
+                if teammate_name is None:
+                    continue
+                graph.assign_task(task.id, teammate_name)
+                graph.mark_running(task.id, metadata={'assigned_by': sender})
+                members.pop(teammate_name, None)
+                self.inbox_store.send(
+                    TeamMessage(
+                        id=uuid.uuid4().hex,
+                        sender=sender,
+                        recipient=teammate_name,
+                        message_type=TeamMessageType.message,
+                        body=task.goal,
+                        metadata={'task_id': task.id, 'task_title': task.title},
+                    )
+                )
+                assigned.append(task.id)
+            if assigned:
+                self.task_store.save_graph(graph)
+            return tuple(assigned)
+
+    def _pick_teammate_for_task(self, task: Task, members: Dict[str, TeamMember]) -> str | None:
+        if task.assignee and task.assignee in members:
+            return task.assignee
+        role_hint = str(task.metadata.get('role', '')).strip()
+        if role_hint:
+            for member in members.values():
+                if member.role == role_hint:
+                    return member.name
+        return next(iter(members.keys()), None)
+
     def _run_teammate_loop(self, spec: PersistentTeammateSpec, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
             messages = self.inbox_store.drain(spec.name)
@@ -351,6 +407,9 @@ class PersistentTeamRuntime:
                     policy=spec.policy,
                     skills=_load_skills(spec.skills),
                 )
+                task_id = str(message.metadata.get('task_id', '')).strip()
+                if task_id:
+                    self._complete_task(task_id, spec.name, result.done, result)
                 self.inbox_store.send(
                     TeamMessage(
                         id=uuid.uuid4().hex,
@@ -360,6 +419,7 @@ class PersistentTeamRuntime:
                         body=result.final_output,
                         metadata={
                             'source_message_id': message.id,
+                            'task_id': task_id,
                             'done': result.done,
                             'stop_reason': result.stop_reason.value,
                             'payload': run_result_to_dict(result, include_history=True),
@@ -367,6 +427,29 @@ class PersistentTeamRuntime:
                     )
                 )
                 self.config_store.update_member_status(spec.name, 'idle')
+
+    def _complete_task(self, task_id: str, teammate_name: str, done: bool, result) -> None:
+        with self._lock:
+            graph = self.task_store.load_graph()
+            if done:
+                graph.mark_completed(
+                    task_id,
+                    metadata={
+                        'agent_id': teammate_name,
+                        'stop_reason': result.stop_reason.value,
+                        'final_output': result.final_output,
+                    },
+                )
+            else:
+                graph.mark_failed(
+                    task_id,
+                    metadata={
+                        'agent_id': teammate_name,
+                        'stop_reason': result.stop_reason.value,
+                        'error': result.error,
+                    },
+                )
+            self.task_store.save_graph(graph)
 
 
 def _load_skills(skill_names: Iterable[str]) -> SkillLoader | None:
