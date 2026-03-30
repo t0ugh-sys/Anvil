@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,7 +19,10 @@ from .memory.jsonl_store import JsonlMemoryStore
 from .ops.doctor import format_doctor_report, run_provider_doctor
 from .run_recorder import RunRecorder
 from .skills import SkillLoader, list_skills, get_skill
+from .task_graph import Task
 from .task_store import TaskStore
+from .team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
+from .tool_use_loop import DeciderFn
 from .tools import build_default_tools
 
 
@@ -32,13 +36,15 @@ def _resolve_goal(args: argparse.Namespace) -> str:
     return args.goal.strip()
 
 
-def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None):
+def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None) -> DeciderFn:
+    from .tool_use_loop import DeciderFn
+
     invoke = build_invoke_from_args(args, mode='coding')
 
     def decider(
         goal: str,
         history: Tuple[str, ...],
-        tool_results,
+        tool_results: Tuple[Any, ...],
         state_summary: Dict[str, object],
         last_steps: Tuple[str, ...],
     ) -> str:
@@ -70,13 +76,16 @@ def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None =
     return decider
 
 
-def _build_coding_summarizer(args: argparse.Namespace):
+def _build_coding_summarizer(args: argparse.Namespace) -> Optional[SummarizerFn]:
+    from .compression import TranscriptEntry
+    from .tool_use_loop import SummarizerFn
+
     if str(args.provider) == 'mock':
         return None
 
     invoke = build_invoke_from_args(args, mode='coding')
 
-    def summarizer(goal: str, previous_summary: str, transcript) -> str:
+    def summarizer(goal: str, previous_summary: str, transcript: Tuple[TranscriptEntry, ...]) -> str:
         transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
         prompt = (
             'Summarize the coding-agent conversation for long-running context compression.\n'
@@ -209,6 +218,216 @@ def _run_code_command(args: argparse.Namespace) -> int:
         if recorder is not None:
             print(f"run_dir: {recorder.run_dir}")
     return 0 if result.done else 1
+
+
+def _parse_teammate(value: str) -> Tuple[str, str]:
+    raw = value.strip()
+    if ':' not in raw:
+        raise ValueError('teammate must be NAME:ROLE')
+    name, role = raw.split(':', 1)
+    name = name.strip()
+    role = role.strip()
+    if not name or not role:
+        raise ValueError('teammate must be NAME:ROLE')
+    return name, role
+
+
+def _parse_team_message(value: str) -> Tuple[str, str]:
+    raw = value.strip()
+    if '=' not in raw:
+        raise ValueError('message must be TARGET=BODY')
+    target, body = raw.split('=', 1)
+    target = target.strip()
+    body = body.strip()
+    if not target or not body:
+        raise ValueError('message must be TARGET=BODY')
+    return target, body
+
+
+def _run_team_run_command(args: argparse.Namespace) -> int:
+    runtime, team_root, teammate_specs = _spawn_team_runtime(args)
+    _append_startup_tasks(runtime, args.task, args.sender)
+
+    expected_replies = 0
+    task_mode = bool(args.task)
+    for item in args.message:
+        recipient, body = _parse_team_message(item)
+        runtime.send_message(recipient, body, sender=args.sender)
+        expected_replies += 1
+    for body in args.broadcast:
+        runtime.broadcast(body, sender=args.sender)
+        expected_replies += len(teammate_specs)
+
+    replies: List[Dict[str, Any]] = []
+    deadline = datetime.now(timezone.utc).timestamp() + args.service_timeout_s
+    try:
+        while datetime.now(timezone.utc).timestamp() < deadline:
+            inbox = runtime.inbox_store.drain(args.sender)
+            for item in inbox:
+                replies.append(item.to_dict())
+            tasks_still_active = task_mode and runtime.has_active_tasks()
+            if expected_replies > 0 and len(replies) >= expected_replies and not tasks_still_active:
+                break
+            if expected_replies == 0 and not tasks_still_active:
+                break
+            time.sleep(args.poll_interval_s)
+    finally:
+        runtime.shutdown_all(sender=args.sender, timeout_s=min(5.0, args.service_timeout_s))
+
+    payload = {
+        'team_dir': str(team_root),
+        'members': [member.to_dict() for member in runtime.config_store.load().members],
+        'replies': replies,
+        'tasks': runtime.load_task_graph().to_dict().get('tasks', []),
+    }
+    if args.output == 'json':
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f'team_dir: {team_root}')
+        print(f'members: {[member["name"] for member in payload["members"]]}')
+        for reply in replies:
+            print(f'{reply["sender"]} -> {reply["recipient"]}: {reply["body"]}')
+    return 0
+
+
+def _spawn_team_runtime(args: argparse.Namespace) -> tuple[PersistentTeamRuntime, Path, list[PersistentTeammateSpec]]:
+    workspace_root = Path(args.workspace).resolve()
+    team_root = (workspace_root / args.team_dir).resolve()
+    runtime = PersistentTeamRuntime(team_root)
+    decider = _build_coding_decider(args, _load_skills_from_args(args))
+    teammate_specs: List[PersistentTeammateSpec] = []
+    for item in args.teammate:
+        name, role = _parse_teammate(item)
+        teammate_specs.append(
+            PersistentTeammateSpec(
+                name=name,
+                role=role,
+                workspace_root=workspace_root,
+                decider=decider,
+                stop=StopConfig(max_steps=args.max_steps, max_elapsed_s=args.timeout_s),
+                skills=tuple(args.skills),
+            )
+        )
+    for spec in teammate_specs:
+        runtime.spawn_teammate(spec)
+    return runtime, team_root, teammate_specs
+
+
+def _append_startup_tasks(runtime: PersistentTeamRuntime, task_bodies: List[str], sender: str) -> None:
+    if not task_bodies:
+        return
+    runtime.replace_task_graph(
+        [
+            Task(id=f'task_{index}', title=body, goal=body)
+            for index, body in enumerate(task_bodies, start=1)
+        ]
+    )
+    runtime.dispatch_ready_tasks(sender=sender)
+
+
+def _run_team_serve_command(args: argparse.Namespace) -> int:
+    runtime, team_root, teammate_specs = _spawn_team_runtime(args)
+    _append_startup_tasks(runtime, args.task, args.sender)
+    for item in args.message:
+        recipient, body = _parse_team_message(item)
+        runtime.send_message(recipient, body, sender=args.sender)
+    for body in args.broadcast:
+        runtime.broadcast(body, sender=args.sender)
+
+    replies: List[Dict[str, Any]] = []
+    deadline = datetime.now(timezone.utc).timestamp() + args.service_timeout_s if args.service_timeout_s > 0 else None
+    idle_since = datetime.now(timezone.utc).timestamp()
+    try:
+        while True:
+            runtime.dispatch_ready_tasks(sender='scheduler')
+            inbox = runtime.inbox_store.drain(args.sender)
+            for item in inbox:
+                replies.append(item.to_dict())
+
+            active = runtime.has_active_tasks() or runtime.has_pending_member_messages()
+            if active:
+                idle_since = datetime.now(timezone.utc).timestamp()
+            if args.idle_exit_s > 0 and not active and (datetime.now(timezone.utc).timestamp() - idle_since) >= args.idle_exit_s:
+                break
+            if deadline is not None and datetime.now(timezone.utc).timestamp() >= deadline:
+                break
+            if runtime.all_teammates_shutdown():
+                break
+            time.sleep(args.poll_interval_s)
+    finally:
+        if not runtime.all_teammates_shutdown():
+            runtime.shutdown_all(sender=args.sender, timeout_s=min(5.0, args.timeout_s))
+
+    payload = {
+        'team_dir': str(team_root),
+        'mode': 'service',
+        'members': [member.to_dict() for member in runtime.config_store.load().members],
+        'replies': replies,
+        'tasks': runtime.load_task_graph().to_dict().get('tasks', []),
+        'teammates': [spec.name for spec in teammate_specs],
+    }
+    if args.output == 'json':
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f'team_dir: {team_root}')
+        print(f'mode: service')
+        print(f'teammates: {[spec.name for spec in teammate_specs]}')
+        print(f'replies: {len(replies)}')
+    return 0
+
+
+def _run_team_add_task_command(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace).resolve()
+    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+    metadata: Dict[str, Any] = {}
+    if args.role:
+        metadata['role'] = args.role
+    task = Task(
+        id=args.task_id or f'task_{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")}',
+        title=args.title or args.goal,
+        goal=args.goal,
+        dependencies=tuple(args.depends_on),
+        assignee=args.assignee or None,
+        metadata=metadata,
+    )
+    graph = runtime.add_task(task)
+    runtime.dispatch_ready_tasks(sender=args.sender)
+    payload = {
+        'team_dir': str((workspace_root / args.team_dir).resolve()),
+        'task': graph.get_task(task.id).to_dict(),
+    }
+    if args.output == 'json':
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f'added task: {task.id}')
+    return 0
+
+
+def _run_team_send_command(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace).resolve()
+    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+    runtime.send_message(args.to, args.message, sender=args.sender)
+    print('ok')
+    return 0
+
+
+def _run_team_broadcast_command(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace).resolve()
+    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+    runtime.broadcast(args.message, sender=args.sender)
+    print('ok')
+    return 0
+
+
+def _run_team_shutdown_command(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace).resolve()
+    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+    if args.all:
+        runtime.shutdown_all(sender=args.sender, timeout_s=args.timeout_s)
+    else:
+        runtime.shutdown_teammate(args.to, sender=args.sender)
+    print('ok')
+    return 0
 
 
 def _run_tools_command(_: argparse.Namespace) -> int:
@@ -358,6 +577,128 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument('--events-file', required=True)
     replay.set_defaults(handler=_run_replay_command)
+
+    team = subparsers.add_parser(
+        'team',
+        help='run or control persistent teammates',
+        description='Manage persistent teammate loops backed by .team/config.json and .team/inbox/*.jsonl',
+    )
+    team_subparsers = team.add_subparsers(dest='team_command', required=True)
+
+    team_run = team_subparsers.add_parser(
+        'run',
+        help='start teammate loops in the current process',
+        description='Spawn persistent teammates, deliver messages, and keep threads alive until idle or timeout.',
+    )
+    team_run.add_argument('--workspace', default='.', help='Workspace root for teammate execution')
+    team_run.add_argument('--team-dir', default='.team', help='Workspace-relative team runtime directory')
+    team_run.add_argument('--teammate', action='append', default=[], required=True, help='Teammate in NAME:ROLE format')
+    team_run.add_argument('--message', action='append', default=[], help='Send startup message TARGET=BODY')
+    team_run.add_argument('--broadcast', action='append', default=[], help='Broadcast startup message to all teammates')
+    team_run.add_argument('--task', action='append', default=[], help='Create and dispatch one task goal per entry')
+    team_run.add_argument('--sender', default='lead')
+    team_run.add_argument('--service-timeout-s', type=float, default=5.0)
+    team_run.add_argument('--poll-interval-s', type=float, default=0.05)
+    team_run.add_argument('--output', choices=['text', 'json'], default='text')
+    team_run.add_argument('--max-steps', type=int, default=12)
+    team_run.add_argument('--timeout-s', type=float, default=120.0)
+    team_run.add_argument(
+        '--provider',
+        choices=['mock', 'openai_compatible', 'anthropic', 'gemini'],
+        default='mock',
+    )
+    team_run.add_argument('--model', default='mock-model')
+    team_run.add_argument('--base-url', default='')
+    team_run.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
+    team_run.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    team_run.add_argument('--temperature', type=float, default=0.2)
+    team_run.add_argument('--provider-timeout-s', type=float, default=60.0)
+    team_run.add_argument('--provider-debug', action='store_true')
+    team_run.add_argument('--fallback-model', action='append', default=[])
+    team_run.add_argument('--max-retries', type=int, default=2)
+    team_run.add_argument('--retry-backoff-s', type=float, default=1.0)
+    team_run.add_argument('--retry-http-code', action='append', type=int, default=[])
+    team_run.add_argument('--provider-header', action='append', default=[])
+    team_run.add_argument('--history-window', type=int, default=8)
+    team_run.add_argument('--skill', action='append', default=[], dest='skills')
+    team_run.set_defaults(handler=_run_team_run_command)
+
+    team_serve = team_subparsers.add_parser(
+        'serve',
+        help='start a long-lived team service',
+        description='Spawn persistent teammates and keep the process alive to serve inbox traffic and task dispatch.',
+    )
+    team_serve.add_argument('--workspace', default='.', help='Workspace root for teammate execution')
+    team_serve.add_argument('--team-dir', default='.team', help='Workspace-relative team runtime directory')
+    team_serve.add_argument('--teammate', action='append', default=[], required=True, help='Teammate in NAME:ROLE format')
+    team_serve.add_argument('--message', action='append', default=[], help='Send startup message TARGET=BODY')
+    team_serve.add_argument('--broadcast', action='append', default=[], help='Broadcast startup message to all teammates')
+    team_serve.add_argument('--task', action='append', default=[], help='Create startup task goals before entering service loop')
+    team_serve.add_argument('--sender', default='lead')
+    team_serve.add_argument('--service-timeout-s', type=float, default=300.0, help='Max wall time for the service; <=0 means no deadline')
+    team_serve.add_argument('--idle-exit-s', type=float, default=0.0, help='Optional idle timeout before the service exits')
+    team_serve.add_argument('--poll-interval-s', type=float, default=0.05)
+    team_serve.add_argument('--output', choices=['text', 'json'], default='text')
+    team_serve.add_argument('--max-steps', type=int, default=12)
+    team_serve.add_argument('--timeout-s', type=float, default=120.0)
+    team_serve.add_argument(
+        '--provider',
+        choices=['mock', 'openai_compatible', 'anthropic', 'gemini'],
+        default='mock',
+    )
+    team_serve.add_argument('--model', default='mock-model')
+    team_serve.add_argument('--base-url', default='')
+    team_serve.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
+    team_serve.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    team_serve.add_argument('--temperature', type=float, default=0.2)
+    team_serve.add_argument('--provider-timeout-s', type=float, default=60.0)
+    team_serve.add_argument('--provider-debug', action='store_true')
+    team_serve.add_argument('--fallback-model', action='append', default=[])
+    team_serve.add_argument('--max-retries', type=int, default=2)
+    team_serve.add_argument('--retry-backoff-s', type=float, default=1.0)
+    team_serve.add_argument('--retry-http-code', action='append', type=int, default=[])
+    team_serve.add_argument('--provider-header', action='append', default=[])
+    team_serve.add_argument('--history-window', type=int, default=8)
+    team_serve.add_argument('--skill', action='append', default=[], dest='skills')
+    team_serve.set_defaults(handler=_run_team_serve_command)
+
+    team_send = team_subparsers.add_parser('send', help='append one message to a teammate inbox')
+    team_send.add_argument('--workspace', default='.')
+    team_send.add_argument('--team-dir', default='.team')
+    team_send.add_argument('--to', required=True)
+    team_send.add_argument('--message', required=True)
+    team_send.add_argument('--sender', default='lead')
+    team_send.set_defaults(handler=_run_team_send_command)
+
+    team_broadcast = team_subparsers.add_parser('broadcast', help='append one broadcast message to all teammate inboxes')
+    team_broadcast.add_argument('--workspace', default='.')
+    team_broadcast.add_argument('--team-dir', default='.team')
+    team_broadcast.add_argument('--message', required=True)
+    team_broadcast.add_argument('--sender', default='lead')
+    team_broadcast.set_defaults(handler=_run_team_broadcast_command)
+
+    team_shutdown = team_subparsers.add_parser('shutdown', help='request teammate shutdown')
+    team_shutdown.add_argument('--workspace', default='.')
+    team_shutdown.add_argument('--team-dir', default='.team')
+    team_shutdown.add_argument('--sender', default='lead')
+    team_shutdown.add_argument('--timeout-s', type=float, default=5.0)
+    target_group = team_shutdown.add_mutually_exclusive_group(required=True)
+    target_group.add_argument('--to')
+    target_group.add_argument('--all', action='store_true')
+    team_shutdown.set_defaults(handler=_run_team_shutdown_command)
+
+    team_add_task = team_subparsers.add_parser('add-task', help='append one task into the team task graph')
+    team_add_task.add_argument('--workspace', default='.')
+    team_add_task.add_argument('--team-dir', default='.team')
+    team_add_task.add_argument('--goal', required=True)
+    team_add_task.add_argument('--title')
+    team_add_task.add_argument('--task-id')
+    team_add_task.add_argument('--depends-on', action='append', default=[])
+    team_add_task.add_argument('--assignee')
+    team_add_task.add_argument('--role')
+    team_add_task.add_argument('--sender', default='lead')
+    team_add_task.add_argument('--output', choices=['text', 'json'], default='text')
+    team_add_task.set_defaults(handler=_run_team_add_task_command)
 
     doctor = subparsers.add_parser(
         'doctor',
