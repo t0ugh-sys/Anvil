@@ -240,46 +240,26 @@ def search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
 
 
 def run_command_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
-    """Run a command in the workspace. 
-    
-    For security, prefer using 'cmd' (list) over 'command' (string with shell=True).
-    If using 'command' string, ensure input is validated to prevent injection.
+    """Run a command in the workspace using shell=False mode for security.
+
+    Args:
+        cmd: List of command arguments (e.g., ['ls', '-la'])
+        id: Optional tool call ID
+
+    Note: Shell features like pipes and wildcards are not supported.
+          Use 'bash -c "cmd1 | cmd2"' if shell features are needed.
     """
-    command = str(args.get('command', '')).strip()
-    cmd_list = args.get('cmd')  # List of args for shell=False mode
+    cmd_list = args.get('cmd')
     call_id = str(args.get('id', 'run_command'))
-    
-    # Determine if we're using safe mode (list of args) or legacy mode (string with shell)
-    if cmd_list is not None and isinstance(cmd_list, list):
-        # Safe mode: use list of arguments, shell=False
-        try:
-            proc = subprocess.run(
-                cmd_list,
-                cwd=str(context.workspace_root),
-                shell=False,
-                check=False,
-                text=True,
-                capture_output=True,
-                encoding='utf-8',
-                errors='replace',
-            )
-            merged = (proc.stdout or '') + (proc.stderr or '')
-            ok = proc.returncode == 0
-            return ToolResult(id=call_id, ok=ok, output=merged.strip(), error=None if ok else f'exit={proc.returncode}')
-        except FileNotFoundError as exc:
-            return ToolResult(id=call_id, ok=False, output='', error=f'command not found: {exc.filename}')
-        except Exception as exc:
-            return ToolResult(id=call_id, ok=False, output='', error=str(exc))
-    
-    # Legacy mode: string command with shell=True (DEPRECATED - security risk)
-    if not command:
-        return ToolResult(id=call_id, ok=False, output='', error='command or cmd is required')
+
+    if not isinstance(cmd_list, list):
+        return ToolResult(id=call_id, ok=False, output='', error='cmd list is required')
 
     try:
         proc = subprocess.run(
-            command,
+            [str(item) for item in cmd_list],
             cwd=str(context.workspace_root),
-            shell=True,
+            shell=False,
             check=False,
             text=True,
             capture_output=True,
@@ -289,6 +269,8 @@ def run_command_tool(context: ToolContext, args: Dict[str, object]) -> ToolResul
         merged = (proc.stdout or '') + (proc.stderr or '')
         ok = proc.returncode == 0
         return ToolResult(id=call_id, ok=ok, output=merged.strip(), error=None if ok else f'exit={proc.returncode}')
+    except FileNotFoundError as exc:
+        return ToolResult(id=call_id, ok=False, output='', error=f'command not found: {exc.filename}')
     except Exception as exc:
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
@@ -609,7 +591,6 @@ def builtin_tool_registrations() -> List[ToolRegistration]:
 
 def build_default_tools() -> ToolDispatchMap:
     return _build_tool_dispatch_map(builtin_tool_registrations())
-    return _build_tool_dispatch_map(registrations)
 
 
 def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: ToolDispatchMap) -> ToolResult:

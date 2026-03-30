@@ -11,7 +11,51 @@ from typing import Callable, Dict, List, Optional, Set
 InvokeFn = Callable[[str], str]
 ChatInvokeFn = Callable[[List[Dict[str, str]]], str]
 
-DEFAULT_RETRY_HTTP_CODES = {502, 503, 504, 524}
+DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
+
+
+class ProviderHttpError(Exception):
+    """HTTP error from LLM provider API."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        super().__init__(f'HTTP {status_code}: {body}')
+        self.status_code = status_code
+        self.body = body
+
+
+def _request_with_retry(
+    request_fn: Callable[[], dict],
+    max_retries: int,
+    retry_backoff_s: float,
+    retry_http_codes: Set[int],
+) -> dict:
+    """Execute HTTP request with exponential backoff retry.
+
+    Args:
+        request_fn: Function that makes the HTTP request and returns response dict
+        max_retries: Maximum number of retry attempts
+        retry_backoff_s: Base backoff time in seconds
+        retry_http_codes: HTTP status codes that should trigger retry
+
+    Returns:
+        Response dict from request_fn
+
+    Raises:
+        ProviderHttpError: If request fails with non-retryable error or all retries exhausted
+    """
+    last_error: Optional[ProviderHttpError] = None
+    for attempt in range(max_retries + 1):
+        try:
+            return request_fn()
+        except ProviderHttpError as exc:
+            last_error = exc
+            if exc.status_code in retry_http_codes and attempt < max_retries:
+                time.sleep(retry_backoff_s * (2**attempt))
+                continue
+            break
+    if last_error is not None:
+        raise last_error
+    raise ValueError('request failed without raising exception')
 
 
 def _anthropic_invoke_factory(
@@ -54,24 +98,21 @@ def _anthropic_invoke_factory(
             raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
 
     def invoke(prompt: str) -> str:
-        last_http_error: Optional[ProviderHttpError ] = None
-        for attempt in range(max_retries + 1):
-            try:
-                response = _request_once(prompt)
-                return response['content'][0]['text']
-            except ProviderHttpError as exc:
-                last_http_error = exc
-                if exc.status_code in retry_http_codes and attempt < max_retries:
-                    time.sleep(retry_backoff_s * (2 ** attempt))
-                    continue
-                break
-
-        if last_http_error is not None:
-            error_msg = f'Anthropic API error: HTTP {last_http_error.status_code}'
-            if last_http_error.body:
-                error_msg += f' - {last_http_error.body[:200]}'
-            raise ValueError(error_msg)
-        raise ValueError('Anthropic API request failed - no response received')
+        try:
+            response = _request_with_retry(
+                request_fn=lambda: _request_once(prompt),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
+            return response['content'][0]['text']
+        except ProviderHttpError as exc:
+            error_msg = f'Anthropic API error: HTTP {exc.status_code}'
+            if exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+        except (KeyError, IndexError) as exc:
+            raise ValueError('invalid Anthropic response format') from exc
 
     return invoke
 
@@ -113,39 +154,30 @@ def _gemini_invoke_factory(
             raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
 
     def invoke(prompt: str) -> str:
-        last_http_error: Optional[ProviderHttpError ] = None
-        for attempt in range(max_retries + 1):
-            try:
-                response = _request_once(prompt)
-                candidates = response.get('candidates', [])
-                if candidates and len(candidates) > 0:
-                    content = candidates[0].get('content', {})
-                    parts = content.get('parts', [])
-                    if parts and len(parts) > 0:
-                        return parts[0].get('text', '')
-                raise ValueError('invalid Gemini response: no candidates/content/parts')
-            except ProviderHttpError as exc:
-                last_http_error = exc
-                if exc.status_code in retry_http_codes and attempt < max_retries:
-                    time.sleep(retry_backoff_s * (2 ** attempt))
-                    continue
-                break
-
-        if last_http_error is not None:
-            error_msg = f'Gemini API error: HTTP {last_http_error.status_code}'
-            if last_http_error.body:
-                error_msg += f' - {last_http_error.body[:200]}'
-            raise ValueError(error_msg)
-        raise ValueError('Gemini API request failed - no response received')
+        try:
+            response = _request_with_retry(
+                request_fn=lambda: _request_once(prompt),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
+            candidates = response.get('candidates', [])
+            if not candidates:
+                raise ValueError('invalid Gemini response: no candidates')
+            content = candidates[0].get('content', {})
+            parts = content.get('parts', [])
+            if not parts:
+                raise ValueError('invalid Gemini response: no parts')
+            return parts[0].get('text', '')
+        except ProviderHttpError as exc:
+            error_msg = f'Gemini API error: HTTP {exc.status_code}'
+            if exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+        except (KeyError, IndexError) as exc:
+            raise ValueError('invalid Gemini response format') from exc
 
     return invoke
-
-
-class ProviderHttpError(Exception):
-    def __init__(self, status_code: int, body: str) -> None:
-        super().__init__(f'HTTP {status_code}: {body}')
-        self.status_code = status_code
-        self.body = body
 
 
 def openai_compatible_chat_invoke_factory(
@@ -200,43 +232,39 @@ def openai_compatible_chat_invoke_factory(
         return json.loads(raw)
 
     def invoke(messages: List[Dict[str, str]]) -> str:
-        last_http_error: Optional[ProviderHttpError] = None
+        last_error: Optional[ProviderHttpError] = None
 
         for current_model in models_to_try:
-            data = None
-            for attempt in range(max_retries + 1):
-                try:
-                    data = _request_once(messages, current_model)
-                    break
-                except ProviderHttpError as exc:
-                    last_http_error = exc
-                    should_retry = exc.status_code in retry_http_codes and attempt < max_retries
-                    if should_retry:
-                        time.sleep(retry_backoff_s * (2 ** attempt))
-                        continue
-                    break
-            if data is None:
+            try:
+                data = _request_with_retry(
+                    request_fn=lambda: _request_once(messages, current_model),
+                    max_retries=max_retries,
+                    retry_backoff_s=retry_backoff_s,
+                    retry_http_codes=retry_http_codes,
+                )
+            except ProviderHttpError as exc:
+                last_error = exc
                 continue
 
             choices = data.get('choices', [])
-            if not isinstance(choices, list) or not choices:
-                raise ValueError('invalid openai-compatible response: choices missing')
+            if not choices:
+                continue
             first = choices[0]
             if not isinstance(first, dict):
-                raise ValueError('invalid openai-compatible response: choice item invalid')
+                continue
             message = first.get('message', {})
             if not isinstance(message, dict):
-                raise ValueError('invalid openai-compatible response: message invalid')
+                continue
             content = message.get('content', '')
             if not isinstance(content, str):
-                raise ValueError('invalid openai-compatible response: content invalid')
+                continue
             return content
 
-        if last_http_error is not None:
+        if last_error is not None:
             if debug:
-                raise ValueError(f'HTTP {last_http_error.status_code}: {last_http_error.body}')
+                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
             raise ValueError(
-                f'HTTP {last_http_error.status_code}: request failed (enable --provider-debug for details)'
+                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
             )
         raise ValueError('provider request failed without response')
 
@@ -330,22 +358,18 @@ def _openai_compatible_invoke_factory(
         return json.loads(raw)
 
     def invoke(prompt: str) -> str:
-        last_http_error: Optional[ProviderHttpError ] = None
+        last_error: Optional[ProviderHttpError] = None
 
         for current_model in models_to_try:
-            data = None
-            for attempt in range(max_retries + 1):
-                try:
-                    data = _request_once(prompt, current_model)
-                    break
-                except ProviderHttpError as exc:
-                    last_http_error = exc
-                    should_retry = exc.status_code in retry_http_codes and attempt < max_retries
-                    if should_retry:
-                        time.sleep(retry_backoff_s * (2 ** attempt))
-                        continue
-                    break
-            if data is None:
+            try:
+                data = _request_with_retry(
+                    request_fn=lambda: _request_once(prompt, current_model),
+                    max_retries=max_retries,
+                    retry_backoff_s=retry_backoff_s,
+                    retry_http_codes=retry_http_codes,
+                )
+            except ProviderHttpError as exc:
+                last_error = exc
                 continue
 
             if wire_api == 'responses':
@@ -386,11 +410,11 @@ def _openai_compatible_invoke_factory(
                 raise ValueError('invalid openai-compatible response: content invalid')
             return content
 
-        if last_http_error is not None:
+        if last_error is not None:
             if debug:
-                raise ValueError(f'HTTP {last_http_error.status_code}: {last_http_error.body}')
+                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
             raise ValueError(
-                f'HTTP {last_http_error.status_code}: request failed (enable --provider-debug for details)'
+                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
             )
         raise ValueError('provider request failed without response')
 

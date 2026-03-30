@@ -22,6 +22,7 @@ from .skills import SkillLoader, list_skills, get_skill
 from .task_graph import Task
 from .task_store import TaskStore
 from .team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
+from .tool_use_loop import DeciderFn
 from .tools import build_default_tools
 
 
@@ -35,13 +36,15 @@ def _resolve_goal(args: argparse.Namespace) -> str:
     return args.goal.strip()
 
 
-def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None):
+def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None) -> DeciderFn:
+    from .tool_use_loop import DeciderFn
+
     invoke = build_invoke_from_args(args, mode='coding')
 
     def decider(
         goal: str,
         history: Tuple[str, ...],
-        tool_results,
+        tool_results: Tuple[Any, ...],
         state_summary: Dict[str, object],
         last_steps: Tuple[str, ...],
     ) -> str:
@@ -73,13 +76,16 @@ def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None =
     return decider
 
 
-def _build_coding_summarizer(args: argparse.Namespace):
+def _build_coding_summarizer(args: argparse.Namespace) -> Optional[SummarizerFn]:
+    from .compression import TranscriptEntry
+    from .tool_use_loop import SummarizerFn
+
     if str(args.provider) == 'mock':
         return None
 
     invoke = build_invoke_from_args(args, mode='coding')
 
-    def summarizer(goal: str, previous_summary: str, transcript) -> str:
+    def summarizer(goal: str, previous_summary: str, transcript: Tuple[TranscriptEntry, ...]) -> str:
         transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
         prompt = (
             'Summarize the coding-agent conversation for long-running context compression.\n'
