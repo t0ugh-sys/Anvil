@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import shutil
+import sys
 import time
 import unittest
 import uuid
@@ -343,16 +345,26 @@ class ToolUseLoopTests(unittest.TestCase):
         tmp_dir.mkdir(parents=True, exist_ok=True)
         captured = {}
         rounds = {'count': 0}
+        command = [sys.executable, '-c', 'print("async-ok")']
         try:
             def decider(goal, history, tool_results, state_summary, last_steps) -> str:
                 rounds['count'] += 1
                 captured['summary'] = state_summary
                 captured['tool_results'] = tool_results
                 if rounds['count'] == 1:
-                    return (
-                        '{"thought":"launch async","plan":["run"],'
-                        '"tool_calls":[{"id":"call_async","name":"run_command_async","arguments":{"cmd":["cmd","/c","echo async-ok"]}}],'
-                        '"final":"later"}'
+                    return json.dumps(
+                        {
+                            'thought': 'launch async',
+                            'plan': ['run'],
+                            'tool_calls': [
+                                {
+                                    'id': 'call_async',
+                                    'name': 'run_command_async',
+                                    'arguments': {'cmd': command},
+                                }
+                            ],
+                            'final': 'later',
+                        }
                     )
                 return '{"thought":"done now","plan":[],"tool_calls":[],"final":null}'
 

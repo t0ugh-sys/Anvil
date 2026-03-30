@@ -256,7 +256,6 @@ python -m loop_agent.agent_cli code --goal "search for info" --skill web_search 
 
 ## Project Layout
 
-- `agents/`: guided learning-path scripts from minimal loop to team/subagent orchestration
 - `skills/`: built-in skill notes and extension references
 - `skills/<name>/SKILL.md`: skill frontmatter plus on-demand full instructions
 - `src/loop_agent/`: core package

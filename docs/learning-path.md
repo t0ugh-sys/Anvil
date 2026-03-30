@@ -1,23 +1,22 @@
 # Learning Path
 
-LoopAgent now exposes a staged path inspired by `learn-claude-code`, but adapted
-to this repository's architecture.
+LoopAgent keeps its staged concepts in the production runtime and docs, instead of
+shipping separate walkthrough scripts.
 
 ## Stages
 
-1. Minimal loop engine: `agents/s01_loop.py`
-2. JSON protocol flow: `agents/s02_protocol.py`
-3. Persistent memory: `agents/s03_memory.py`
-4. Skill loading: `agents/s04_skills.py`
-5. Coding-agent execution: `agents/s05_coding.py`
-6. Team orchestration: `agents/s06_team.py`
-7. Worktree isolation: future orchestration stage built on `worktree_manager.py`
-8. Consolidated view: `agents/s_full.py`
+1. Minimal loop engine: `src/loop_agent/core/`
+2. JSON protocol flow: `src/loop_agent/agent_protocol.py`
+3. Persistent memory: `src/loop_agent/memory/`
+4. Skill loading: `src/loop_agent/skills.py`
+5. Coding-agent execution: `src/loop_agent/coding_agent.py`
+6. Team orchestration: `src/loop_agent/subagents.py` and `src/loop_agent/scheduler.py`
+7. Worktree isolation: `src/loop_agent/worktree_manager.py`
+8. Consolidated runtime loop: `src/loop_agent/tool_use_loop.py`
 
 ## Why This Layout
 
-- New users can understand the system incrementally.
+- New users can still understand the system incrementally.
 - Production code stays under `src/loop_agent/`.
-- Example scripts stay thin and reuse real runtime code.
-- The repo reads like a harness project, not a one-off demo.
+- The repo avoids shipping disposable walkthrough scripts as first-class surface area.
 - The orchestration layer stays explicit instead of being hidden in prompt text.
