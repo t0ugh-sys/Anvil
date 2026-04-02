@@ -143,12 +143,10 @@ class MessageGroup:
 
 # ============== Token Estimation ==============
 
-def estimate_tokens(text: str) -> int:
-    """估算 token 数量（简单实现）"""
-    if not text:
-        return 0
-    # 简单估算: 1 token ≈ 4 characters
-    return max(1, len(text) // 4)
+def estimate_tokens(parts: Iterable[str]) -> int:
+    """估算 token 数量（原始实现）"""
+    total_chars = sum(len(part) for part in parts if part)
+    return max(1, total_chars // 4) if total_chars else 0
 
 
 def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
@@ -156,16 +154,16 @@ def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
     total = 0
     for msg in messages:
         # 计算角色
-        total += estimate_tokens(msg.get('role', ''))
+        total += estimate_tokens([msg.get('role', '')])
         
         # 计算内容
         content = msg.get('content', '')
         if isinstance(content, str):
-            total += estimate_tokens(content)
+            total += estimate_tokens([content])
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
-                    total += estimate_tokens(str(block.get('text', '')))
+                    total += estimate_tokens([str(block.get('text', ''))])
     
     # 加上工具开销（估计）
     total += len(messages) * 10
@@ -362,9 +360,6 @@ def _generate_archive_summary(groups: List[MessageGroup]) -> str:
                         tool_count += 1
         
         lines.append(f'- Round {group.round_id}: {tool_count} tool calls, {group.token_count} tokens')
-    
-# Legacy aliases for backward compatibility
-estimate_tokens = estimate_messages_tokens
 
 
 def micro_compact_entries(
