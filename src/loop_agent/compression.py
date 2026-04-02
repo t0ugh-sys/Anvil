@@ -15,6 +15,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ============== Compression Types ==============
 
+# Backward compatibility alias
+CompressionConfig = CompactConfig
+
+
 class CompactStrategy(Enum):
     """压缩策略"""
     NONE = auto()           # 无压缩
