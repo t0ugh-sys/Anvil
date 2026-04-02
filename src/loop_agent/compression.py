@@ -15,9 +15,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ============== Compression Types ==============
 
-# Backward compatibility alias
-CompressionConfig = CompactConfig
-
 
 class CompactStrategy(Enum):
     """压缩策略"""
@@ -61,6 +58,10 @@ class CompactConfig:
     # 压缩后恢复
     max_restore_files: int = 5
     max_tokens_per_file: int = 5000
+
+
+# Backward compatibility alias (must be after CompactConfig definition)
+CompressionConfig = CompactConfig
 
 
 @dataclass
