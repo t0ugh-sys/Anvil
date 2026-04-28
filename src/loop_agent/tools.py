@@ -14,7 +14,10 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple
 from .agent_protocol import ToolCall, ToolResult
 from .background import BackgroundCommandRunner
 from .compression import CompactManager
+from .permissions import PermissionMode
 from .policies import ToolPolicy
+from .policies import TOOL_CAPABILITIES
+from .tool_spec import ToolRisk, ToolSpec
 from .todo import render_todo_lines
 
 
@@ -492,6 +495,83 @@ def compact_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     if reason:
         message += f': {reason}'
     return ToolResult(id=call_id, ok=True, output=message, error=None)
+
+
+_BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
+    'load_skill': 'Load full skill instructions into the conversation on demand.',
+    'compact': 'Request transcript compaction for long-running sessions.',
+    'todo_write': 'Update the visible todo list stored in runtime state.',
+    'read_file': 'Read one file from the workspace.',
+    'write_file': 'Write one UTF-8 file inside the workspace.',
+    'apply_patch': 'Apply a structured patch to workspace files.',
+    'search': 'Search workspace files for a literal pattern.',
+    'run_command': 'Run one command with shell disabled inside the workspace.',
+    'run_command_async': 'Start one background command inside the workspace.',
+    'web_search': 'Search the web through a simple HTTP search endpoint.',
+    'fetch_url': 'Fetch and strip text content from one URL.',
+    'analyze_memory': 'Analyze prior run summaries under the memory directory.',
+    'git_status': 'Inspect git repository status.',
+    'git_branch_list': 'List git branches.',
+    'git_checkout': 'Switch git branches.',
+    'git_pull': 'Pull from a remote branch.',
+    'git_merge': 'Merge git branches.',
+    'git_merge_and_push': 'Merge changes and push them upstream.',
+    'git_push': 'Push local branch state upstream.',
+    'gh_auth_status': 'Check GitHub CLI authentication state.',
+    'gh_repo_list': 'List GitHub repositories.',
+    'gh_repo_create': 'Create a GitHub repository.',
+    'gh_repo_clone': 'Clone a GitHub repository into the workspace.',
+    'gh_issue_list': 'List GitHub issues.',
+    'gh_issue_create': 'Create a GitHub issue.',
+    'gh_issue_close': 'Close a GitHub issue.',
+    'gh_pr_list': 'List GitHub pull requests.',
+    'gh_pr_create': 'Create a GitHub pull request.',
+    'gh_pr_view': 'View a GitHub pull request.',
+    'gh_pr_checks': 'Inspect GitHub pull request checks.',
+    'gh_pr_comment': 'Comment on a GitHub pull request.',
+    'gh_pr_merge': 'Merge a GitHub pull request.',
+}
+
+_BUILTIN_TOOL_INPUT_NOTES: Dict[str, str] = {
+    'apply_patch': 'Provide a full structured patch with Begin/End Patch markers.',
+    'run_command': 'Use cmd as a list of arguments; shell syntax is not supported.',
+    'run_command_async': 'Use cmd as a list of arguments; command runs in background.',
+    'web_search': 'Provide query text.',
+    'fetch_url': 'Provide one URL string.',
+    'todo_write': 'Provide items as a list of todo objects.',
+}
+
+
+def _risk_for_capabilities(capabilities: Tuple[Any, ...]) -> ToolRisk:
+    if any(item.value in {'write', 'network'} for item in capabilities):
+        return ToolRisk.high
+    if any(item.value == 'execute' for item in capabilities):
+        return ToolRisk.high
+    if any(item.value == 'memory' for item in capabilities):
+        return ToolRisk.medium
+    return ToolRisk.low
+
+
+def builtin_tool_specs() -> List[ToolSpec]:
+    names = [name for name, _ in builtin_tool_registrations()]
+    specs: List[ToolSpec] = []
+    for name in names:
+        capabilities = TOOL_CAPABILITIES.get(name, tuple())
+        specs.append(
+            ToolSpec(
+                name=name,
+                description=_BUILTIN_TOOL_DESCRIPTIONS.get(name, f'{name} tool'),
+                capabilities=capabilities,
+                risk_level=_risk_for_capabilities(capabilities),
+                requires_workspace=True,
+                input_notes=_BUILTIN_TOOL_INPUT_NOTES.get(name, ''),
+            )
+        )
+    return specs
+
+
+def builtin_tool_specs_map() -> Dict[str, ToolSpec]:
+    return {item.name: item for item in builtin_tool_specs()}
 def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: ToolFn) -> ToolDispatchMap:
     dispatch_map[name] = handler
     return dispatch_map
@@ -595,7 +675,47 @@ def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: ToolDisp
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')
     if not context.policy.allows_tool(tool_call.name):
         denied = ', '.join(item.value for item in context.policy.denied_capabilities_for_tool(tool_call.name))
-        return ToolResult(id=tool_call.id, ok=False, output='', error=f'tool blocked by policy: {tool_call.name} ({denied})')
+        return ToolResult(
+            id=tool_call.id,
+            ok=False,
+            output='',
+            error=f'tool blocked by policy: {tool_call.name} ({denied})',
+            metadata={'permission_decision': 'deny', 'permission_reason': f'policy blocked capabilities: {denied}'},
+        )
+    permission_manager = getattr(context.policy, 'permission_manager', None)
+    if permission_manager is not None:
+        capabilities = TOOL_CAPABILITIES.get(tool_call.name, tuple())
+        request = permission_manager.build_request(
+            tool_name=tool_call.name,
+            arguments=dict(tool_call.arguments),
+            workspace_root=context.workspace_root,
+            capabilities=capabilities,
+        )
+        decision = permission_manager.decide(request)
+        if decision.mode != PermissionMode.allow:
+            permission_manager.record_decision(decision.cache_key, decision.mode)
+            return ToolResult(
+                id=tool_call.id,
+                ok=False,
+                output='',
+                error=f'tool blocked by permission: {tool_call.name} ({decision.reason})',
+                metadata={
+                    'permission_decision': decision.mode,
+                    'permission_reason': decision.reason,
+                    'permission_cached': decision.cached,
+                },
+            )
     args = dict(tool_call.arguments)
     args.setdefault('id', tool_call.id)
-    return tool(context, args)
+    result = tool(context, args)
+    if permission_manager is not None:
+        request = permission_manager.build_request(
+            tool_name=tool_call.name,
+            arguments=args,
+            workspace_root=context.workspace_root,
+            capabilities=TOOL_CAPABILITIES.get(tool_call.name, tuple()),
+        )
+        permission_manager.record_decision(request.cache_key, PermissionMode.allow)
+        result.metadata.setdefault('permission_decision', PermissionMode.allow)
+        result.metadata.setdefault('permission_reason', f'{tool_call.name} allowed')
+    return result

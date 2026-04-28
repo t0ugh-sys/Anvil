@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Mapping, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 
 class Capability(str, Enum):
@@ -16,12 +16,36 @@ class Capability(str, Enum):
 TOOL_CAPABILITIES: Dict[str, Tuple[Capability, ...]] = {
     'read_file': (Capability.read,),
     'search': (Capability.read,),
+    'load_skill': (Capability.read,),
     'write_file': (Capability.write,),
     'apply_patch': (Capability.write,),
+    'todo_write': (Capability.memory,),
+    'compact': (Capability.memory,),
     'run_command': (Capability.execute,),
+    'run_command_async': (Capability.execute,),
     'web_search': (Capability.network,),
     'fetch_url': (Capability.network,),
     'analyze_memory': (Capability.memory, Capability.read),
+    'git_status': (Capability.execute, Capability.read),
+    'git_branch_list': (Capability.execute, Capability.read),
+    'git_checkout': (Capability.execute, Capability.write),
+    'git_pull': (Capability.execute, Capability.network),
+    'git_merge': (Capability.execute, Capability.write),
+    'git_merge_and_push': (Capability.execute, Capability.write, Capability.network),
+    'git_push': (Capability.execute, Capability.network),
+    'gh_auth_status': (Capability.execute, Capability.network),
+    'gh_repo_list': (Capability.execute, Capability.network),
+    'gh_repo_create': (Capability.execute, Capability.network),
+    'gh_repo_clone': (Capability.execute, Capability.network, Capability.write),
+    'gh_issue_list': (Capability.execute, Capability.network),
+    'gh_issue_create': (Capability.execute, Capability.network, Capability.write),
+    'gh_issue_close': (Capability.execute, Capability.network, Capability.write),
+    'gh_pr_list': (Capability.execute, Capability.network),
+    'gh_pr_create': (Capability.execute, Capability.network, Capability.write),
+    'gh_pr_view': (Capability.execute, Capability.network),
+    'gh_pr_checks': (Capability.execute, Capability.network),
+    'gh_pr_comment': (Capability.execute, Capability.network, Capability.write),
+    'gh_pr_merge': (Capability.execute, Capability.network, Capability.write),
 }
 
 
@@ -29,6 +53,7 @@ TOOL_CAPABILITIES: Dict[str, Tuple[Capability, ...]] = {
 class ToolPolicy:
     allowed: Tuple[Capability, ...] = field(default_factory=tuple)
     denied: Tuple[Capability, ...] = field(default_factory=tuple)
+    permission_manager: Any = None
 
     @classmethod
     def allow_all(cls) -> 'ToolPolicy':

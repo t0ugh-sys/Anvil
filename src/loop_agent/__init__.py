@@ -24,6 +24,10 @@ from . import todo
 from . import task_store
 from . import compression
 from . import background
+from . import permissions
+from . import runtime
+from . import session
+from . import tool_spec
 
 __all__ = [
     'LoopAgent',
@@ -58,4 +62,8 @@ __all__ = [
     'task_store',
     'compression',
     'background',
+    'permissions',
+    'runtime',
+    'session',
+    'tool_spec',
 ]

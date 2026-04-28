@@ -25,12 +25,25 @@ class EventRow:
     event: str
     step: Optional[int]
     payload: Dict[str, Any]
+    session_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    permission_decision: Optional[str] = None
+    permission_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "ts": self.ts,
             "event": self.event,
             "step": self.step,
             "payload": self.payload,
         }
+        if self.session_id is not None:
+            payload["session_id"] = self.session_id
+        if self.tool_name is not None:
+            payload["tool_name"] = self.tool_name
+        if self.permission_decision is not None:
+            payload["permission_decision"] = self.permission_decision
+        if self.permission_reason is not None:
+            payload["permission_reason"] = self.permission_reason
+        return payload

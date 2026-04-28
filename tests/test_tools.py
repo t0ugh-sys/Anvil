@@ -13,6 +13,7 @@ from loop_agent.tools import (
     ToolContext,
     build_default_tools,
     builtin_tool_registrations,
+    builtin_tool_specs,
     execute_tool_call,
     fetch_url_tool,
     read_file_tool,
@@ -37,6 +38,13 @@ class ToolsTests(unittest.TestCase):
         self.assertIn('git_status', names)
         self.assertIn('gh_issue_list', names)
         self.assertEqual(set(names), set(dispatch.keys()))
+
+    def test_should_expose_builtin_tool_specs(self) -> None:
+        specs = {item.name: item for item in builtin_tool_specs()}
+        self.assertIn('read_file', specs)
+        self.assertEqual(specs['read_file'].capabilities[0].value, 'read')
+        self.assertIn('run_command', specs)
+        self.assertEqual(specs['run_command'].risk_level.value, 'high')
 
     def test_should_load_skill_body_on_demand(self) -> None:
         loader = SkillLoader()
