@@ -73,6 +73,9 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(restored.state.message_count, 1)
             self.assertEqual(restored.state.step_count, 1)
             self.assertTrue(restored.state.last_activity_at)
+            self.assertEqual(restored.state.last_user_message, 'inspect runtime')
+            self.assertEqual(restored.state.last_blocked_tool_name, 'write_file')
+            self.assertEqual(restored.state.last_blocked_tool_reason, 'blocked')
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

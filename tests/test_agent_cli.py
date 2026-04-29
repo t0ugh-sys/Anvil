@@ -129,6 +129,7 @@ class AgentCliTests(unittest.TestCase):
             self.assertIn('turn_count: 1', result.output)
             self.assertIn('message_count: 1', result.output)
             self.assertIn('command_count: 1', result.output)
+            self.assertIn('last_user_message: hello', result.output)
             change_result = execute_slash_command(
                 parse_slash_command('/provider anthropic'),
                 session_store=session_store,
@@ -451,6 +452,10 @@ class AgentCliTests(unittest.TestCase):
             message_count=4,
             command_count=1,
             step_count=3,
+            last_user_message='hello',
+            last_stop_reason='max_steps',
+            last_blocked_tool_name='run_command_async',
+            last_blocked_tool_reason='approval required',
             permission_stats={'allow': 3, 'deny': 1, 'ask': 2},
         )
         output = render_session_status(
@@ -463,6 +468,10 @@ class AgentCliTests(unittest.TestCase):
         self.assertIn('command_count: 1', output)
         self.assertIn('step_count: 3', output)
         self.assertIn('last_activity_at: 2026-04-29T10:01:00Z', output)
+        self.assertIn('last_user_message: hello', output)
+        self.assertIn('last_stop_reason: max_steps', output)
+        self.assertIn('last_blocked_tool: run_command_async', output)
+        self.assertIn('last_blocked_reason: approval required', output)
         self.assertIn('permission_stats: allow=3 deny=1 ask=2', output)
         self.assertIn('todo_state:\n[x] inspect repo', output)
         self.assertIn('recent_tools:\n- read_file [ok] permission=allow', output)

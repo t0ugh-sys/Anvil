@@ -33,6 +33,10 @@ class SessionState:
     command_count: int = 0
     step_count: int = 0
     last_activity_at: str = ''
+    last_user_message: str = ''
+    last_stop_reason: str = ''
+    last_blocked_tool_name: str = ''
+    last_blocked_tool_reason: str = ''
     permission_stats: dict[str, int] = field(default_factory=lambda: {'allow': 0, 'deny': 0, 'ask': 0})
 
     def to_dict(self) -> Dict[str, object]:
@@ -56,6 +60,10 @@ class SessionState:
             'command_count': self.command_count,
             'step_count': self.step_count,
             'last_activity_at': self.last_activity_at,
+            'last_user_message': self.last_user_message,
+            'last_stop_reason': self.last_stop_reason,
+            'last_blocked_tool_name': self.last_blocked_tool_name,
+            'last_blocked_tool_reason': self.last_blocked_tool_reason,
             'permission_stats': dict(self.permission_stats),
         }
 
@@ -85,6 +93,10 @@ class SessionState:
             command_count=int(payload.get('command_count', 0) or 0),
             step_count=int(payload.get('step_count', 0) or 0),
             last_activity_at=str(payload.get('last_activity_at', '')),
+            last_user_message=str(payload.get('last_user_message', '')),
+            last_stop_reason=str(payload.get('last_stop_reason', '')),
+            last_blocked_tool_name=str(payload.get('last_blocked_tool_name', '')),
+            last_blocked_tool_reason=str(payload.get('last_blocked_tool_reason', '')),
             permission_stats={
                 str(key): int(value)
                 for key, value in dict(payload.get('permission_stats', {'allow': 0, 'deny': 0, 'ask': 0})).items()
@@ -199,6 +211,7 @@ class SessionStore:
                 self.state.message_count += 1
                 if event == 'chat_user':
                     self.state.turn_count += 1
+                    self.state.last_user_message = content
         if event == 'step_succeeded':
             self.state.step_count += 1
             output = payload.get('output')
@@ -238,8 +251,15 @@ class SessionStore:
                     mode = result.get('permission_decision')
                     if isinstance(mode, str) and mode in self.state.permission_stats:
                         self.state.permission_stats[mode] = self.state.permission_stats.get(mode, 0) + 1
+                        if mode in {'deny', 'ask'}:
+                            self.state.last_blocked_tool_name = str(call_names.get(call_id, ''))
+                            reason = result.get('permission_reason')
+                            self.state.last_blocked_tool_reason = str(reason) if isinstance(reason, str) else ''
         if event == 'run_finished':
             self.state.status = 'completed' if payload.get('done') else 'stopped'
+            stop_reason = payload.get('stop_reason')
+            if isinstance(stop_reason, str):
+                self.state.last_stop_reason = stop_reason
         self._write_session()
 
     def _extract_event_annotations(self, payload: Dict[str, Any]) -> tuple[str | None, str | None, str | None]:
