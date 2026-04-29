@@ -10,8 +10,11 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from anvil.agent_cli import _build_coding_decider, _run_code_command, build_parser
+from anvil.agent_cli import _build_coding_decider, _run_code_command, _should_launch_interactive, build_parser
+from anvil.commands import execute_slash_command, parse_slash_command
+from anvil.session import SessionStore
 from anvil.skills import SkillLoader
+from anvil.tools import builtin_tool_specs
 
 
 class AgentCliTests(unittest.TestCase):
@@ -41,10 +44,21 @@ class AgentCliTests(unittest.TestCase):
         help_text = parser.format_help()
         self.assertIn('tool-use feedback loop', help_text)
 
+    def test_should_launch_interactive_without_subcommand(self) -> None:
+        self.assertTrue(_should_launch_interactive([]))
+        self.assertTrue(_should_launch_interactive(['--session-id', 's1']))
+        self.assertFalse(_should_launch_interactive(['tools']))
+        self.assertFalse(_should_launch_interactive(['code', '--goal', 'x']))
+
     def test_should_list_tools_subcommand(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['tools'])
         self.assertEqual(args.command, 'tools')
+
+    def test_should_parse_help_and_resume_slash_commands(self) -> None:
+        self.assertEqual(parse_slash_command('/help').name, 'help')
+        self.assertEqual(parse_slash_command('/resume now').argument, 'now')
+        self.assertIsNone(parse_slash_command('plain text'))
 
     def test_should_describe_tool_use_loop_in_code_help(self) -> None:
         parser = build_parser()
@@ -75,6 +89,28 @@ class AgentCliTests(unittest.TestCase):
         )
         self.assertEqual(args.command, 'doctor')
         self.assertEqual(args.base_url, 'https://example.com/v1')
+
+    def test_should_execute_resume_slash_command(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'session-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_store = SessionStore.create(
+                root_dir=tmp_dir,
+                workspace_root=tmp_dir,
+                goal='inspect runtime',
+                memory_run_dir=tmp_dir / 'memory',
+            )
+            session_store.append_event('chat_user', {'role': 'user', 'content': 'hello'})
+            result = execute_slash_command(
+                parse_slash_command('/resume'),
+                session_store=session_store,
+                tool_specs=builtin_tool_specs(),
+            )
+            self.assertIn('session_id:', result.output)
+            self.assertIn('inspect runtime', result.output)
+            self.assertIn('user: hello', result.output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def test_should_run_code_with_mock_provider(self) -> None:
         parser = build_parser()

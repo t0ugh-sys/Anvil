@@ -160,6 +160,14 @@ class SessionStore:
             if isinstance(goal, str) and goal.strip():
                 self.state.goal = goal
                 self.state.status = 'active'
+        if event in {'chat_user', 'chat_assistant'}:
+            content = payload.get('content')
+            role = payload.get('role')
+            if isinstance(content, str) and content:
+                prefix = f'{role}: ' if isinstance(role, str) and role else ''
+                self.state.history_tail.append(prefix + content)
+                self.state.history_tail = self.state.history_tail[-20:]
+                self.state.status = 'active'
         if event == 'step_succeeded':
             output = payload.get('output')
             if isinstance(output, str) and output:

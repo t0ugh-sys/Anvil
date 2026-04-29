@@ -61,6 +61,8 @@ python -m anvil.cli --goal "write a one-line self introduction" --strategy demo 
 
 ```bash
 npm i -g git+https://github.com/t0ugh-sys/Anvil.git
+anvil
+anvil --session-id <session_id>
 anvil tools
 anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
@@ -81,11 +83,24 @@ python -m anvil.cli --goal-file goal.txt --strategy json_stub --max-steps 1 --ex
 ### Agent CLI
 
 ```bash
+anvil
+anvil --session-id <session_id>
 anvil tools
 anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
 
-The `anvil` entrypoint is the direct CLI surface of the core loop:
+The default `anvil` entrypoint now starts an interactive session-first runtime. It persists chat state under `.anvil/sessions/<session_id>/` and supports basic slash commands:
+
+```text
+/help
+/tools
+/resume
+/exit
+```
+
+`anvil code ...` remains the explicit non-interactive batch runtime.
+
+The `anvil code` entrypoint is still the direct CLI surface of the core loop:
 
 ```text
 model decides -> tool calls execute -> tool results feed back -> stop or continue

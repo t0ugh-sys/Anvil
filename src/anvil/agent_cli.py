@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import sys
@@ -10,12 +11,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .agent_protocol import render_agent_step_schema
+from .chat_runtime import InteractiveRuntime
 from .coding_agent import run_coding_agent
 from .compression import CompressionConfig, summarize_entries_deterministically
 from .core.types import StopConfig
 from .llm.providers import build_invoke_from_args
 from .ops.doctor import format_doctor_report, run_provider_doctor
 from .runtime import CodeRuntime
+from .session import SessionStore
 from .skills import SkillLoader, list_skills, get_skill
 from .task_graph import Task
 from .task_store import TaskStore
@@ -189,6 +192,127 @@ def _run_code_command(args: argparse.Namespace) -> int:
         if 'run_dir' in payload:
             print(f"run_dir: {payload['run_dir']}")
     return 0 if result.done else 1
+
+
+def _build_interactive_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog='anvil',
+        description='Run Anvil as an interactive coding runtime.',
+    )
+    parser.add_argument('--workspace', default='.', help='Workspace root available to tools')
+    parser.add_argument('--session-id', default='', help='Resume an existing interactive session id')
+    parser.add_argument('--sessions-dir', default='.anvil/sessions', help='Root directory for persisted sessions')
+    parser.add_argument('--permission-mode', choices=['strict', 'balanced', 'unsafe'], default='balanced')
+    parser.add_argument(
+        '--provider',
+        choices=['mock', 'openai_compatible', 'anthropic', 'gemini'],
+        default='mock',
+    )
+    parser.add_argument('--model', default='mock-model')
+    parser.add_argument('--base-url', default='')
+    parser.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
+    parser.add_argument('--api-key-env', default='OPENAI_API_KEY')
+    parser.add_argument('--temperature', type=float, default=0.2)
+    parser.add_argument('--provider-timeout-s', type=float, default=60.0)
+    parser.add_argument('--provider-debug', action='store_true')
+    parser.add_argument('--fallback-model', action='append', default=[])
+    parser.add_argument('--max-retries', type=int, default=2)
+    parser.add_argument('--retry-backoff-s', type=float, default=1.0)
+    parser.add_argument('--retry-http-code', action='append', type=int, default=[])
+    parser.add_argument('--provider-header', action='append', default=[])
+    parser.add_argument('--max-steps', type=int, default=12)
+    parser.add_argument('--timeout-s', type=float, default=120.0)
+    parser.add_argument('--history-window', type=int, default=8)
+    parser.add_argument('--memory-dir', default='.anvil/runs')
+    parser.add_argument('--run-id')
+    parser.add_argument('--summarize-every', type=int, default=5)
+    parser.add_argument('--record-run', action='store_true', default=True)
+    parser.add_argument('--no-record-run', action='store_false', dest='record_run')
+    parser.add_argument('--runs-dir', default='.anvil/runs')
+    parser.add_argument('--observer-file')
+    parser.add_argument('--include-history', action='store_true')
+    parser.add_argument('--tasks-dir', default='.tasks')
+    parser.add_argument('--transcripts-dir', default='.transcripts')
+    parser.add_argument('--max-context-tokens', type=int, default=50000)
+    parser.add_argument('--micro-compact-keep', type=int, default=3)
+    parser.add_argument('--recent-transcript-entries', type=int, default=8)
+    parser.add_argument('--output', choices=['text', 'json'], default='text')
+    parser.add_argument(
+        '--skill',
+        action='append',
+        default=[],
+        dest='skills',
+        help='Skills to load into the tool dispatch',
+    )
+    return parser
+
+
+def _should_launch_interactive(argv: List[str]) -> bool:
+    if not argv:
+        return True
+    first = argv[0]
+    if first in {'-h', '--help'}:
+        return False
+    return first not in {'code', 'tools', 'skills', 'replay', 'team', 'doctor'}
+
+
+def _build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
+    def run_turn(user_text: str) -> str:
+        turn_args = copy.deepcopy(base_args)
+        turn_args.session_id = session_id
+        turn_args.goal = user_text
+        turn_args.goal_file = ''
+        runtime = CodeRuntime(turn_args, goal=user_text)
+        skills = _load_skills_from_args(turn_args)
+        decider = _build_coding_decider(turn_args, skills)
+        summarizer = _build_coding_summarizer(turn_args)
+        if runtime.observer is not None:
+            runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
+        result = run_coding_agent(
+            goal=runtime.goal,
+            decider=decider,
+            workspace_root=runtime.workspace_root,
+            stop=StopConfig(max_steps=turn_args.max_steps, max_elapsed_s=turn_args.timeout_s),
+            observer=runtime.observer,
+            context_provider=runtime.build_context_provider(),
+            skills=skills,
+            policy=runtime.build_policy(),
+            task_store=runtime.task_store,
+            compression_config=runtime.compression_config,
+            transcripts_dir=runtime.transcripts_dir,
+            summarizer=summarizer,
+        )
+        payload = runtime.finalize(result)
+        return str(payload.get('final_output', '') or '')
+
+    return run_turn
+
+
+def _run_interactive_command(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace).resolve()
+    sessions_root = Path(args.sessions_dir)
+    if not sessions_root.is_absolute():
+        if str(args.sessions_dir) == '.anvil/sessions':
+            sessions_root = (workspace_root / sessions_root).resolve()
+        else:
+            sessions_root = sessions_root.resolve()
+    if args.session_id:
+        session_store = SessionStore.load(root_dir=sessions_root, session_id=args.session_id)
+    else:
+        session_store = SessionStore.create(
+            root_dir=sessions_root,
+            workspace_root=workspace_root,
+            goal='',
+            memory_run_dir=Path(args.memory_dir) / (args.run_id or _default_run_id()),
+        )
+    runtime = InteractiveRuntime(
+        session_store=session_store,
+        tool_specs=builtin_tool_specs(),
+        run_turn=_build_interactive_turn_runner(args, session_id=session_store.state.session_id),
+        stdin=sys.stdin,
+        stdout=sys.stdout,
+    )
+    return runtime.run()
 
 
 def _parse_teammate(value: str) -> Tuple[str, str]:
@@ -711,8 +835,14 @@ def main() -> None:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
+    argv = sys.argv[1:]
+    if _should_launch_interactive(argv):
+        parser = _build_interactive_parser()
+        args = parser.parse_args(argv)
+        code = _run_interactive_command(args)
+        raise SystemExit(code)
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     code = args.handler(args)
     raise SystemExit(code)
 
