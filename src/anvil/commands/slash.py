@@ -33,6 +33,24 @@ def render_session_header(
     )
 
 
+def render_runtime_panel(
+    state: SessionState,
+    *,
+    runtime_config_text: str,
+) -> str:
+    return (
+        f'{render_session_header(state, runtime_label="runtime")}\n'
+        f'status: {state.status}\n'
+        f'goal: {state.goal or "(empty)"}\n'
+        f'last_activity_at: {state.last_activity_at or state.updated_at}\n'
+        f'last_stop_reason: {state.last_stop_reason or "(empty)"}\n'
+        f'permission_mode_cache_entries: {len(state.permission_cache)}\n'
+        f'memory_run_dir: {state.memory_run_dir or "(empty)"}\n'
+        f'artifacts_dir: {state.artifacts_dir or "(empty)"}\n'
+        f'{runtime_config_text}'
+    )
+
+
 def render_session_status(
     state: SessionState,
     *,
@@ -120,7 +138,12 @@ def execute_slash_command(
     if command.name == 'config':
         if runtime_config_manager is None:
             return CommandResult(output='runtime config unavailable')
-        return CommandResult(output=runtime_config_manager.summary())
+        return CommandResult(
+            output=render_runtime_panel(
+                session_store.state,
+                runtime_config_text=runtime_config_manager.summary(),
+            )
+        )
     if command.name == 'provider':
         if runtime_config_manager is None:
             return CommandResult(output='runtime config unavailable')
