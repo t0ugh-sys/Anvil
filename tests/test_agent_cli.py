@@ -14,7 +14,7 @@ from anvil.agent_cli import _build_coding_decider, _run_code_command, _should_la
 from anvil.commands import execute_slash_command, parse_slash_command
 from anvil.commands.slash import render_session_header, render_session_status
 from anvil.session import SessionState, SessionStore
-from anvil.services.cli_commands import _render_pretty_replay
+from anvil.services.cli_commands import _filter_replay_rows, _render_pretty_replay
 from anvil.services.runtime_config import RuntimeConfigManager
 from anvil.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
@@ -97,6 +97,12 @@ class AgentCliTests(unittest.TestCase):
         )
         self.assertEqual(args.command, 'doctor')
         self.assertEqual(args.base_url, 'https://example.com/v1')
+
+    def test_should_parse_replay_filter_option(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['replay', '--pretty', '--filter', 'permissions-only'])
+        self.assertEqual(args.command, 'replay')
+        self.assertEqual(args.filter, 'permissions-only')
 
     def test_should_run_team_add_task_command(self) -> None:
         parser = build_parser()
@@ -458,6 +464,48 @@ class AgentCliTests(unittest.TestCase):
         self.assertIn('todo_write', output)
         self.assertIn('allow', output)
         self.assertIn('run_finished', output)
+
+    def test_should_filter_replay_rows_by_permissions(self) -> None:
+        rows = [
+            {'event': 'run_started', 'payload': {'goal': 'inspect runtime'}},
+            {
+                'event': 'step_succeeded',
+                'tool_name': 'run_command',
+                'permission_decision': 'ask',
+                'payload': {
+                    'metadata': {
+                        'tool_results': [
+                            {'permission_decision': 'ask', 'permission_reason': 'approval required'}
+                        ]
+                    }
+                },
+            },
+            {'event': 'chat_user', 'payload': {'content': 'hello'}},
+        ]
+        filtered = _filter_replay_rows(rows, 'permissions-only')
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]['tool_name'], 'run_command')
+
+    def test_should_filter_replay_rows_by_errors(self) -> None:
+        rows = [
+            {'event': 'run_started', 'payload': {'goal': 'inspect runtime'}},
+            {
+                'event': 'step_succeeded',
+                'tool_name': 'run_command',
+                'payload': {
+                    'metadata': {
+                        'tool_results': [
+                            {'error': 'exit=1', 'permission_decision': 'allow'}
+                        ]
+                    }
+                },
+            },
+            {'event': 'run_finished', 'payload': {'done': False, 'stop_reason': 'step_error'}},
+        ]
+        filtered = _filter_replay_rows(rows, 'errors-only')
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(filtered[0]['event'], 'step_succeeded')
+        self.assertEqual(filtered[1]['event'], 'run_finished')
 
     def test_should_render_session_status_with_todos_and_permissions(self) -> None:
         state = SessionState(

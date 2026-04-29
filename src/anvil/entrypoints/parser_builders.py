@@ -207,6 +207,12 @@ def register_replay_parser(subparsers, *, handler) -> argparse.ArgumentParser:
     replay.add_argument('--sessions-dir', default='.anvil/sessions')
     replay.add_argument('--pretty', action='store_true', help='Render a human-readable event stream')
     replay.add_argument('--limit', type=int, help='Limit pretty replay to the most recent N events')
+    replay.add_argument(
+        '--filter',
+        choices=['all', 'errors-only', 'tool-only', 'permissions-only'],
+        default='all',
+        help='Filter pretty replay output for debugging specific event classes',
+    )
     replay.set_defaults(handler=handler)
     return replay
 

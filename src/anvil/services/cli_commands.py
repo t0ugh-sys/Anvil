@@ -53,6 +53,41 @@ def _load_event_rows(events_file: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _filter_replay_rows(rows: Iterable[Dict[str, Any]], filter_name: str) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    for row in rows:
+        event = str(row.get('event', ''))
+        payload = row.get('payload', {})
+        payload_dict = payload if isinstance(payload, dict) else {}
+        permission_decision = str(row.get('permission_decision', '') or '')
+        tool_name = str(row.get('tool_name', '') or '')
+
+        if filter_name == 'all':
+            selected.append(row)
+            continue
+        if filter_name == 'tool-only':
+            if tool_name or event == 'step_succeeded':
+                selected.append(row)
+            continue
+        if filter_name == 'permissions-only':
+            if permission_decision:
+                selected.append(row)
+            continue
+        if filter_name == 'errors-only':
+            error_text = str(payload_dict.get('error', '') or '')
+            metadata = payload_dict.get('metadata', {})
+            metadata_dict = metadata if isinstance(metadata, dict) else {}
+            tool_results = metadata_dict.get('tool_results', [])
+            has_tool_error = any(
+                isinstance(item, dict) and (item.get('error') or item.get('permission_decision') in {'ask', 'deny'})
+                for item in tool_results
+            )
+            stop_reason = str(payload_dict.get('stop_reason', '') or '')
+            if error_text or has_tool_error or stop_reason in {'step_error'}:
+                selected.append(row)
+    return selected
+
+
 def _trim_text(value: object, *, limit: int = 120) -> str:
     if not isinstance(value, str):
         return ''
@@ -114,6 +149,7 @@ def run_replay_command(args: argparse.Namespace) -> int:
         print(events_file.read_text(encoding='utf-8'))
         return 0
     rows = _load_event_rows(events_file)
+    rows = _filter_replay_rows(rows, str(getattr(args, 'filter', 'all') or 'all'))
     limit = getattr(args, 'limit', None)
     if isinstance(limit, int) and limit > 0:
         rows = rows[-limit:]
