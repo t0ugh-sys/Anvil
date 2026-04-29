@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Iterable, Literal
 
 
 MessageRole = Literal['system', 'user', 'assistant']
@@ -14,6 +14,11 @@ class ChatMessage:
 
     def render_line(self) -> str:
         return f'{self.role}: {self.content}'
+
+
+def render_transcript(lines: Iterable[str]) -> str:
+    rendered = [line for line in lines if isinstance(line, str) and line.strip()]
+    return '\n'.join(rendered) if rendered else '(empty)'
 
 
 class SystemMessage(ChatMessage):

@@ -95,6 +95,10 @@ The default `anvil` entrypoint starts an interactive session-first runtime. It p
 
 ```text
 /help
+/status
+/history
+/permissions
+/todo
 /tools
 /resume
 /exit

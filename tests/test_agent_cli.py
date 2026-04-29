@@ -11,7 +11,14 @@ from unittest.mock import patch
 import _bootstrap  # noqa: F401
 
 from anvil.agent_cli import _build_coding_decider, _run_code_command, _should_launch_interactive, build_parser
-from anvil.commands import execute_slash_command, parse_slash_command
+from anvil.commands import (
+    execute_slash_command,
+    format_history_summary,
+    format_permission_summary,
+    format_status_summary,
+    format_todo_summary,
+    parse_slash_command,
+)
 from anvil.session import SessionStore
 from anvil.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
@@ -58,7 +65,36 @@ class AgentCliTests(unittest.TestCase):
     def test_should_parse_help_and_resume_slash_commands(self) -> None:
         self.assertEqual(parse_slash_command('/help').name, 'help')
         self.assertEqual(parse_slash_command('/resume now').argument, 'now')
+        self.assertEqual(parse_slash_command('/status').name, 'status')
         self.assertIsNone(parse_slash_command('plain text'))
+
+    def test_should_format_session_views(self) -> None:
+        tmp_dir = Path('D:/workspace/Anvil/.tmp') / f'session-view-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_store = SessionStore.create(
+                root_dir=tmp_dir,
+                workspace_root=tmp_dir,
+                goal='inspect runtime',
+                memory_run_dir=tmp_dir / 'memory',
+            )
+            session_store.state.last_summary = 'repo inspected'
+            session_store.state.permission_stats = {'allow': 2, 'deny': 1, 'ask': 3}
+            session_store.state.permission_cache = {'read_file:*': 'allow'}
+            session_store.state.todo_state = {
+                'items': [
+                    {'content': 'inspect repo', 'status': 'completed'},
+                    {'content': 'edit runtime', 'status': 'in_progress'},
+                ]
+            }
+            session_store.append_event('chat_user', {'role': 'user', 'content': 'hello'})
+            session_store.append_event('chat_assistant', {'role': 'assistant', 'content': 'hi'})
+            self.assertIn('session_id:', format_status_summary(session_store))
+            self.assertIn('recent_history:', format_history_summary(session_store))
+            self.assertIn('cached_rules: 1', format_permission_summary(session_store))
+            self.assertIn('[completed] inspect repo', format_todo_summary(session_store))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def test_should_describe_tool_use_loop_in_code_help(self) -> None:
         parser = build_parser()
@@ -91,7 +127,7 @@ class AgentCliTests(unittest.TestCase):
         self.assertEqual(args.base_url, 'https://example.com/v1')
 
     def test_should_execute_resume_slash_command(self) -> None:
-        tmp_dir = Path('tests/.tmp') / f'session-{uuid.uuid4().hex}'
+        tmp_dir = Path('D:/workspace/Anvil/.tmp') / f'session-{uuid.uuid4().hex}'
         tmp_dir.mkdir(parents=True, exist_ok=True)
         try:
             session_store = SessionStore.create(
@@ -101,6 +137,7 @@ class AgentCliTests(unittest.TestCase):
                 memory_run_dir=tmp_dir / 'memory',
             )
             session_store.append_event('chat_user', {'role': 'user', 'content': 'hello'})
+            session_store.state.permission_stats = {'allow': 1, 'deny': 0, 'ask': 0}
             result = execute_slash_command(
                 parse_slash_command('/resume'),
                 session_store=session_store,
@@ -109,6 +146,7 @@ class AgentCliTests(unittest.TestCase):
             self.assertIn('session_id:', result.output)
             self.assertIn('inspect runtime', result.output)
             self.assertIn('user: hello', result.output)
+            self.assertIn('permissions:', result.output)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
