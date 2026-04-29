@@ -1,5 +1,5 @@
 """
-Logging system for LoopAgent
+Logging system for Anvil
 
 Provides structured logging with different levels and outputs.
 """
@@ -29,7 +29,7 @@ class LogOutput(Enum):
 
 
 class Logger:
-    """Simple structured logger for LoopAgent."""
+    """Simple structured logger for Anvil."""
     
     def __init__(
         self,

@@ -122,7 +122,7 @@ def _apply_model_change(current_cfg: ChatConfig, model: str) -> Tuple[ChatConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog='loopagent-chat')
+    p = argparse.ArgumentParser(prog='anvil-chat')
     p.add_argument('--provider', choices=PROVIDERS, default='openai_compatible')
     p.add_argument('--model', default='')
     p.add_argument('--base-url', default='')
@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--provider-timeout-s', type=float, default=60.0)
     p.add_argument('--history-limit', type=int, default=30, help='max messages to send as context')
     p.add_argument('--chat-id', default='')
-    p.add_argument('--chat-dir', default='.loopagent/chats', help='chat logs root dir')
+    p.add_argument('--chat-dir', default='.anvil/chats', help='chat logs root dir')
     return p
 
 

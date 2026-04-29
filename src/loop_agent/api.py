@@ -1,7 +1,7 @@
 """
-High-level API for LoopAgent
+High-level API for Anvil
 
-Provides a simple programmatic interface for using LoopAgent.
+Provides a simple programmatic interface for using Anvil.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from .errors import validate_goal, validate_max_steps, validate_temperature
 
 @dataclass
 class AgentConfig:
-    """Configuration for LoopAgent."""
+    """Configuration for Anvil."""
     provider: str = "mock"
     model: str = "mock-model"
     base_url: str = ""
@@ -64,7 +64,7 @@ class AgentResult:
 
 
 class LoopAgentAPI:
-    """High-level API for LoopAgent."""
+    """High-level API for Anvil."""
     
     def __init__(self, config: AgentConfig | None = None):
         self.config = config or AgentConfig()

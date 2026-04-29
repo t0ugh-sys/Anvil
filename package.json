@@ -1,9 +1,10 @@
 {
-  "name": "@t0ugh-sys/loopagent",
+  "name": "@t0ugh-sys/anvil",
   "version": "0.1.0",
-  "description": "Node CLI wrapper for the LoopAgent Python runtime",
+  "description": "Node CLI wrapper for the Anvil Python runtime",
   "main": "bin/loopagent.js",
   "bin": {
+    "anvil": "bin/loopagent.js",
     "loopagent": "bin/loopagent.js"
   },
   "type": "commonjs",

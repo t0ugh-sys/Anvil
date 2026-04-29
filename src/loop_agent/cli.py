@@ -20,7 +20,7 @@ def _default_run_id() -> str:
 
 
 def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='LoopAgent')
+    parser = argparse.ArgumentParser(prog='Anvil')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--goal', help='用户目标/需求描述（短文本，尽量避免复杂编码问题）')
     group.add_argument('--goal-file', help='从 UTF-8 文件读取目标（推荐用于中文/长文本）')
@@ -50,12 +50,12 @@ def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
     parser.add_argument('--include-history', action='store_true', help='JSON 输出时是否包含 history')
     parser.add_argument('--observer-file', help='将事件回调按 JSONL 写入指定文件')
     parser.add_argument('--exit-on-failure', action='store_true', help='当未完成时返回非零退出码')
-    parser.add_argument('--memory-dir', default='.loopagent/runs', help='记忆目录根路径')
+    parser.add_argument('--memory-dir', default='.anvil/runs', help='记忆目录根路径')
     parser.add_argument('--run-id', help='本次运行 ID（默认使用 UTC 时间戳）')
     parser.add_argument('--summarize-every', type=int, default=5, help='每 N 个事件更新一次 state_summary')
     parser.add_argument('--record-run', action='store_true', default=True, help='记录本次运行到 runs 目录（默认开启）')
     parser.add_argument('--no-record-run', action='store_false', dest='record_run', help='关闭本次运行记录')
-    parser.add_argument('--runs-dir', default='.loopagent/runs', help='运行记录根目录')
+    parser.add_argument('--runs-dir', default='.anvil/runs', help='运行记录根目录')
     return parser
 
 

@@ -1,5 +1,5 @@
 """
-Prompt Template System for LoopAgent
+Prompt Template System for Anvil
 
 Provides reusable prompt templates with variable substitution.
 """

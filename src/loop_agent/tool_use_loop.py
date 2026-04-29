@@ -268,7 +268,14 @@ def _build_round_metadata(
             for call in tool_calls
         ],
         'tool_results': [
-            {'id': item.id, 'ok': item.ok, 'error': item.error, 'output': item.output[:2000]}
+            {
+                'id': item.id,
+                'ok': item.ok,
+                'error': item.error,
+                'output': item.output[:2000],
+                'permission_decision': item.metadata.get('permission_decision'),
+                'permission_reason': item.metadata.get('permission_reason'),
+            }
             for item in tool_results
         ],
         'has_tool_calls': len(tool_calls) > 0,

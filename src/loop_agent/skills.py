@@ -1,5 +1,5 @@
 """
-Skill System for LoopAgent
+Skill System for Anvil
 
 Skills are pluggable capabilities that can be loaded dynamically.
 Each skill provides tools and/or prompt enhancements for the agent.

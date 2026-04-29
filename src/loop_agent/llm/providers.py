@@ -73,7 +73,7 @@ def _anthropic_invoke_factory(
         'x-api-key': api_key,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
-        'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+        'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
     }
 
     def _request_once(prompt: str) -> dict:
@@ -131,7 +131,7 @@ def _gemini_invoke_factory(
     endpoint = f'{base_url}/models/{model}:generateContent?key={api_key}'
     headers = {
         'Content-Type': 'application/json',
-        'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+        'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
     }
 
     def _request_once(prompt: str) -> dict:
@@ -214,7 +214,7 @@ def openai_compatible_chat_invoke_factory(
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+            'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
             'Authorization': f'Bearer {api_key}',
         }
         headers.update(extra_headers)
@@ -340,7 +340,7 @@ def _openai_compatible_invoke_factory(
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'LoopAgent/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
+            'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/LoopAgent)',
             'Authorization': f'Bearer {api_key}',
         }
         headers.update(extra_headers)

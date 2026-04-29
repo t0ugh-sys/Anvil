@@ -7,7 +7,7 @@ const path = require('path');
 const cp = require('child_process');
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..');
-const BRIDGE_ROOT = path.join(os.homedir(), '.loopagent', 'npm-bridge');
+const BRIDGE_ROOT = path.join(os.homedir(), '.anvil', 'npm-bridge');
 const VENV_DIR = path.join(BRIDGE_ROOT, 'venv');
 const MARKER_FILE = path.join(BRIDGE_ROOT, 'install.json');
 
@@ -120,7 +120,7 @@ function installPythonRuntime(pythonCandidate) {
 function ensureRuntime() {
   const pythonCandidate = detectPython();
   if (!pythonCandidate) {
-    console.error('LoopAgent requires Python 3.11+ (set LOOPAGENT_PYTHON if needed).');
+    console.error('Anvil requires Python 3.11+ (set LOOPAGENT_PYTHON if needed).');
     process.exit(1);
   }
   if (shouldInstall()) {

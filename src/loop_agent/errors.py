@@ -1,5 +1,5 @@
 """
-Error handling and validation utilities for LoopAgent
+Error handling and validation utilities for Anvil
 
 Provides consistent error handling and input validation across the project.
 """
@@ -11,7 +11,7 @@ from typing import Any
 
 
 class LoopAgentError(Exception):
-    """Base exception for LoopAgent."""
+    """Base exception for Anvil."""
     code: str = "LOOP_AGENT_ERROR"
     
     def __init__(self, message: str, details: dict[str, Any] | None = None):

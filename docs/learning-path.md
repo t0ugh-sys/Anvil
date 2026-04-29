@@ -1,6 +1,6 @@
 # Learning Path
 
-LoopAgent keeps its staged concepts in the production runtime and docs, instead of
+Anvil keeps its staged concepts in the production runtime and docs, instead of
 shipping separate walkthrough scripts.
 
 ## Stages

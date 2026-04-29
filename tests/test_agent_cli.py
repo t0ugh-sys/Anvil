@@ -4,6 +4,7 @@ import shutil
 import unittest
 import uuid
 import json
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,7 +34,7 @@ class AgentCliTests(unittest.TestCase):
         prompt = captured['prompt']
         self.assertIn('Available skills:', prompt)
         self.assertIn('- files: Read, write, patch, and search files', prompt)
-        self.assertNotIn('# LoopAgent Skills', prompt)
+        self.assertNotIn('# Anvil Skills', prompt)
 
     def test_should_describe_tool_use_loop_in_root_help(self) -> None:
         parser = build_parser()
@@ -102,10 +103,15 @@ class AgentCliTests(unittest.TestCase):
                     'json',
                 ]
             )
-            exit_code = _run_code_command(args)
+            with patch('sys.stdout', io.StringIO()):
+                exit_code = _run_code_command(args)
             self.assertEqual(exit_code, 0)
             self.assertTrue((memory_dir / 'r1' / 'events.jsonl').exists())
             self.assertTrue((memory_dir / 'r1' / 'summary.json').exists())
+            session_root = tmp_dir / '.anvil' / 'sessions'
+            sessions = [item for item in session_root.iterdir() if item.is_dir()]
+            self.assertEqual(len(sessions), 1)
+            self.assertTrue((sessions[0] / 'session.json').exists())
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -136,6 +142,12 @@ class AgentCliTests(unittest.TestCase):
                 '4',
                 '--recent-transcript-entries',
                 '6',
+                '--session-id',
+                's1',
+                '--sessions-dir',
+                '.sessions',
+                '--permission-mode',
+                'unsafe',
             ]
         )
         self.assertEqual(args.memory_dir, 'mem')
@@ -149,6 +161,9 @@ class AgentCliTests(unittest.TestCase):
         self.assertEqual(args.max_context_tokens, 2048)
         self.assertEqual(args.micro_compact_keep, 4)
         self.assertEqual(args.recent_transcript_entries, 6)
+        self.assertEqual(args.session_id, 's1')
+        self.assertEqual(args.sessions_dir, '.sessions')
+        self.assertEqual(args.permission_mode, 'unsafe')
 
     def test_should_record_structured_tool_events(self) -> None:
         parser = build_parser()
@@ -175,7 +190,8 @@ class AgentCliTests(unittest.TestCase):
                     'json',
                 ]
             )
-            _run_code_command(args)
+            with patch('sys.stdout', io.StringIO()):
+                _run_code_command(args)
             rows = []
             for line in observer_file.read_text(encoding='utf-8').splitlines():
                 rows.append(json.loads(line))
@@ -207,8 +223,110 @@ class AgentCliTests(unittest.TestCase):
                     'mock-v3',
                 ]
             )
-            _run_code_command(args)
+            with patch('sys.stdout', io.StringIO()):
+                _run_code_command(args)
             self.assertTrue((tmp_dir / '.tasks').exists())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_resume_existing_session_without_goal(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'ocli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        memory_dir = tmp_dir / 'memory'
+        sessions_dir = tmp_dir / '.sessions'
+        try:
+            args = parser.parse_args(
+                [
+                    'code',
+                    '--goal',
+                    'read workspace then finalize',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--memory-dir',
+                    str(memory_dir),
+                    '--sessions-dir',
+                    str(sessions_dir),
+                    '--output',
+                    'json',
+                ]
+            )
+            buffer = io.StringIO()
+            with patch('sys.stdout', buffer):
+                self.assertEqual(_run_code_command(args), 0)
+            first_payload = json.loads(buffer.getvalue())
+            session_id = first_payload['session_id']
+
+            args2 = parser.parse_args(
+                [
+                    'code',
+                    '--session-id',
+                    session_id,
+                    '--workspace',
+                    str(tmp_dir),
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--memory-dir',
+                    str(memory_dir),
+                    '--sessions-dir',
+                    str(sessions_dir),
+                    '--output',
+                    'json',
+                ]
+            )
+            buffer2 = io.StringIO()
+            with patch('sys.stdout', buffer2):
+                self.assertEqual(_run_code_command(args2), 0)
+            second_payload = json.loads(buffer2.getvalue())
+            self.assertEqual(second_payload['session_id'], session_id)
+            self.assertEqual(second_payload['memory_run_dir'], first_payload['memory_run_dir'])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_replay_events_from_session_id(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'ocli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        sessions_dir = tmp_dir / '.sessions'
+        try:
+            args = parser.parse_args(
+                [
+                    'code',
+                    '--goal',
+                    'read workspace then finalize',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--sessions-dir',
+                    str(sessions_dir),
+                    '--output',
+                    'json',
+                ]
+            )
+            buffer = io.StringIO()
+            with patch('sys.stdout', buffer):
+                self.assertEqual(_run_code_command(args), 0)
+            payload = json.loads(buffer.getvalue())
+            replay_args = parser.parse_args(
+                ['replay', '--session-id', payload['session_id'], '--sessions-dir', str(sessions_dir)]
+            )
+            replay_buffer = io.StringIO()
+            with patch('sys.stdout', replay_buffer):
+                self.assertEqual(replay_args.handler(replay_args), 0)
+            replay_text = replay_buffer.getvalue()
+            self.assertIn('"event": "run_started"', replay_text)
+            self.assertIn(payload['session_id'], replay_text)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
