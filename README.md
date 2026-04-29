@@ -110,6 +110,7 @@ You can switch provider and model during the same interactive session. The curre
 Use `/status` to inspect the current session, todo state, permission counts, and recent tool activity.
 Use `/tools` to inspect the current tool surface grouped by capability and risk.
 Interactive startup now shows a session header with turn, message, command, and step counts.
+Interactive turns now print a footer with stop reason, step count, permission outcomes, and current session counters.
 
 `anvil code ...` remains the explicit non-interactive batch runtime.
 

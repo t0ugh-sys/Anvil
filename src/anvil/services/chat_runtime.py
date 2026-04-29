@@ -9,7 +9,17 @@ from ..session import SessionStore
 from ..tool_spec import ToolSpec
 
 
-TurnRunner = Callable[[str], str]
+@dataclass(frozen=True)
+class TurnExecution:
+    output: str
+    stop_reason: str = ''
+    steps: int = 0
+    permission_delta: dict[str, int] | None = None
+    blocked_tool_name: str = ''
+    blocked_tool_reason: str = ''
+
+
+TurnRunner = Callable[[str], TurnExecution | str]
 
 
 @dataclass
@@ -54,13 +64,48 @@ class InteractiveRuntime:
     def _handle_message(self, text: str) -> None:
         user_message = UserMessage(content=text)
         self.session_store.append_event('chat_user', {'role': user_message.role, 'content': user_message.content})
-        output = self.run_turn(text).strip() or 'No response.'
+        turn_execution = self._coerce_turn_execution(self.run_turn(text))
+        output = turn_execution.output.strip() or 'No response.'
         assistant_message = AssistantMessage(content=output)
         self.session_store.append_event(
             'chat_assistant',
             {'role': assistant_message.role, 'content': assistant_message.content},
         )
         self._write_line(assistant_message.content)
+        footer = self._render_turn_footer(turn_execution)
+        if footer:
+            self._write_line(footer)
+
+    def _coerce_turn_execution(self, value: TurnExecution | str) -> TurnExecution:
+        if isinstance(value, TurnExecution):
+            return value
+        return TurnExecution(output=str(value))
+
+    def _render_turn_footer(self, turn_execution: TurnExecution) -> str:
+        parts: list[str] = []
+        if turn_execution.stop_reason:
+            parts.append(f'stop_reason={turn_execution.stop_reason}')
+        if turn_execution.steps > 0:
+            parts.append(f'steps={turn_execution.steps}')
+        permission_delta = turn_execution.permission_delta or {}
+        permission_parts = [
+            f'{name}+{count}'
+            for name, count in permission_delta.items()
+            if isinstance(count, int) and count > 0
+        ]
+        if permission_parts:
+            parts.append('permissions=' + ','.join(permission_parts))
+        if turn_execution.blocked_tool_name:
+            blocked = turn_execution.blocked_tool_name
+            if turn_execution.blocked_tool_reason:
+                blocked += f' ({turn_execution.blocked_tool_reason})'
+            parts.append(f'blocked={blocked}')
+        state = self.session_store.state
+        parts.append(
+            f'session=turns:{state.turn_count} messages:{state.message_count} '
+            f'commands:{state.command_count} steps:{state.step_count}'
+        )
+        return '[turn] ' + ' '.join(parts) if parts else ''
 
     def _write(self, value: str) -> None:
         self.stdout.write(value)

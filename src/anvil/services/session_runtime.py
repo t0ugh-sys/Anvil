@@ -11,7 +11,7 @@ from ..core.types import StopConfig
 from ..runtime import CodeRuntime
 from ..session import SessionStore
 from ..tools import builtin_tool_specs
-from .chat_runtime import InteractiveRuntime
+from .chat_runtime import InteractiveRuntime, TurnExecution
 from .coding_runtime import build_coding_decider, build_coding_summarizer, load_skills_from_args
 from .runtime_config import RuntimeConfigManager
 
@@ -79,13 +79,14 @@ def should_launch_interactive(argv: List[str]) -> bool:
 
 
 def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str, runtime_config_manager: RuntimeConfigManager):
-    def run_turn(user_text: str) -> str:
+    def run_turn(user_text: str) -> TurnExecution:
         turn_args = copy.deepcopy(base_args)
         runtime_config_manager.apply_to_args(turn_args)
         turn_args.session_id = session_id
         turn_args.goal = user_text
         turn_args.goal_file = ''
         runtime = CodeRuntime(turn_args, goal=user_text)
+        permission_before = dict(runtime.session_store.state.permission_stats)
         skills = load_skills_from_args(turn_args)
         decider = build_coding_decider(turn_args, skills)
         summarizer = build_coding_summarizer(turn_args)
@@ -106,7 +107,21 @@ def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: 
             summarizer=summarizer,
         )
         payload = runtime.finalize(result)
-        return str(payload.get('final_output', '') or '')
+        permission_after = payload.get('permission_stats', {})
+        permission_delta = {}
+        if isinstance(permission_after, dict):
+            for key in ('allow', 'deny', 'ask'):
+                after_value = int(permission_after.get(key, 0) or 0)
+                before_value = int(permission_before.get(key, 0) or 0)
+                permission_delta[key] = max(0, after_value - before_value)
+        return TurnExecution(
+            output=str(payload.get('final_output', '') or ''),
+            stop_reason=str(payload.get('stop_reason', '') or ''),
+            steps=int(payload.get('steps', 0) or 0),
+            permission_delta=permission_delta,
+            blocked_tool_name=runtime.session_store.state.last_blocked_tool_name,
+            blocked_tool_reason=runtime.session_store.state.last_blocked_tool_reason,
+        )
 
     return run_turn
 

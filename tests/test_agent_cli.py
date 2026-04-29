@@ -15,6 +15,7 @@ from anvil.commands import execute_slash_command, parse_slash_command
 from anvil.commands.slash import render_session_header, render_session_status
 from anvil.session import SessionState, SessionStore
 from anvil.services.cli_commands import _filter_replay_rows, _render_pretty_replay
+from anvil.services.chat_runtime import InteractiveRuntime, TurnExecution
 from anvil.services.runtime_config import RuntimeConfigManager
 from anvil.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
@@ -103,6 +104,40 @@ class AgentCliTests(unittest.TestCase):
         args = parser.parse_args(['replay', '--pretty', '--filter', 'permissions-only'])
         self.assertEqual(args.command, 'replay')
         self.assertEqual(args.filter, 'permissions-only')
+
+    def test_should_render_interactive_turn_footer(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'chat-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_store = SessionStore.create(
+                root_dir=tmp_dir,
+                workspace_root=tmp_dir,
+                goal='inspect runtime',
+                memory_run_dir=tmp_dir / 'memory',
+            )
+            runtime = InteractiveRuntime(
+                session_store=session_store,
+                tool_specs=builtin_tool_specs(),
+                run_turn=lambda _: TurnExecution(
+                    output='done',
+                    stop_reason='max_steps',
+                    steps=2,
+                    permission_delta={'allow': 1, 'ask': 1, 'deny': 0},
+                    blocked_tool_name='run_command',
+                    blocked_tool_reason='approval required',
+                ),
+                runtime_config_manager=None,
+                stdin=io.StringIO('hello\n'),
+                stdout=io.StringIO(),
+            )
+            self.assertEqual(runtime.run(), 0)
+            rendered = runtime.stdout.getvalue()
+            self.assertIn('done', rendered)
+            self.assertIn('[turn] stop_reason=max_steps steps=2 permissions=allow+1,ask+1', rendered)
+            self.assertIn('blocked=run_command (approval required)', rendered)
+            self.assertIn('session=turns:1 messages:2 commands:0 steps:0', rendered)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def test_should_run_team_add_task_command(self) -> None:
         parser = build_parser()
