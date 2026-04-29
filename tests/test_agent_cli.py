@@ -25,6 +25,7 @@ from anvil.commands import (
 from anvil.services.event_viewer import render_event_row
 from anvil.services.catalog_service import render_skills, render_tools
 from anvil.services.replay_service import render_replay, resolve_events_file
+from anvil.services.team_service import parse_team_message, parse_teammate
 from anvil.session import SessionStore
 from anvil.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
@@ -336,6 +337,14 @@ class AgentCliTests(unittest.TestCase):
             self.assertIn('"event": "run_started"', raw)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_parse_team_inputs(self) -> None:
+        self.assertEqual(parse_teammate('dev:coder'), ('dev', 'coder'))
+        self.assertEqual(parse_team_message('lead=ship it'), ('lead', 'ship it'))
+        with self.assertRaises(ValueError):
+            parse_teammate('broken')
+        with self.assertRaises(ValueError):
+            parse_team_message('broken')
 
     def test_should_record_structured_tool_events(self) -> None:
         parser = build_parser()
