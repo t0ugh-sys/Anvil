@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, TextIO
 
-from ..commands.slash import execute_slash_command, parse_slash_command
+from ..commands.slash import execute_slash_command, parse_slash_command, render_session_header
 from ..messages import AssistantMessage, UserMessage
 from ..session import SessionStore
 from ..tool_spec import ToolSpec
@@ -22,10 +22,7 @@ class InteractiveRuntime:
     stdout: TextIO
 
     def run(self) -> int:
-        self._write_line(
-            f'Anvil interactive session {self.session_store.state.session_id} '
-            f'({self.session_store.state.workspace_root})'
-        )
+        self._write_line(render_session_header(self.session_store.state, runtime_label='interactive'))
         self._write_line(
             'Type /help for commands. Use /status to inspect the session. '
             'Use /provider and /model to switch models during the session.'

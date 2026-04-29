@@ -109,6 +109,7 @@ The default `anvil` entrypoint starts an interactive session-first runtime. It p
 You can switch provider and model during the same interactive session. The current runtime config is persisted in the session and restored on resume.
 Use `/status` to inspect the current session, todo state, permission counts, and recent tool activity.
 Use `/tools` to inspect the current tool surface grouped by capability and risk.
+Interactive startup now shows a session header with turn, message, command, and step counts.
 
 `anvil code ...` remains the explicit non-interactive batch runtime.
 

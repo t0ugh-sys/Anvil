@@ -12,7 +12,7 @@ import _bootstrap  # noqa: F401
 
 from anvil.agent_cli import _build_coding_decider, _run_code_command, _should_launch_interactive, build_parser
 from anvil.commands import execute_slash_command, parse_slash_command
-from anvil.commands.slash import render_session_status
+from anvil.commands.slash import render_session_header, render_session_status
 from anvil.session import SessionState, SessionStore
 from anvil.services.cli_commands import _render_pretty_replay
 from anvil.services.runtime_config import RuntimeConfigManager
@@ -115,6 +115,7 @@ class AgentCliTests(unittest.TestCase):
                 wire_api = 'chat_completions'
             runtime_config_manager = RuntimeConfigManager.from_args(session_store=session_store, args=Args())
             session_store.append_event('chat_user', {'role': 'user', 'content': 'hello'})
+            session_store.append_event('chat_command', {'command': 'status', 'argument': ''})
             result = execute_slash_command(
                 parse_slash_command('/resume'),
                 session_store=session_store,
@@ -125,6 +126,9 @@ class AgentCliTests(unittest.TestCase):
             self.assertIn('inspect runtime', result.output)
             self.assertIn('user: hello', result.output)
             self.assertIn('provider: mock', result.output)
+            self.assertIn('turn_count: 1', result.output)
+            self.assertIn('message_count: 1', result.output)
+            self.assertIn('command_count: 1', result.output)
             change_result = execute_slash_command(
                 parse_slash_command('/provider anthropic'),
                 session_store=session_store,
@@ -431,6 +435,7 @@ class AgentCliTests(unittest.TestCase):
             status='active',
             created_at='2026-04-29T10:00:00Z',
             updated_at='2026-04-29T10:01:00Z',
+            last_activity_at='2026-04-29T10:01:00Z',
             history_tail=['user: hello', 'assistant: ok'],
             tool_history=[
                 {'name': 'read_file', 'ok': True, 'permission_decision': 'allow'},
@@ -442,6 +447,10 @@ class AgentCliTests(unittest.TestCase):
             memory_run_dir='.anvil/runs/r1',
             artifacts_dir='.anvil/runs/r1',
             last_summary='working through runtime config',
+            turn_count=2,
+            message_count=4,
+            command_count=1,
+            step_count=3,
             permission_stats={'allow': 3, 'deny': 1, 'ask': 2},
         )
         output = render_session_status(
@@ -449,10 +458,33 @@ class AgentCliTests(unittest.TestCase):
             runtime_config_text='runtime_config:\nprovider: anthropic\nmodel: claude-3-opus-20240229',
         )
         self.assertIn('session_id: s1', output)
+        self.assertIn('turn_count: 2', output)
+        self.assertIn('message_count: 4', output)
+        self.assertIn('command_count: 1', output)
+        self.assertIn('step_count: 3', output)
+        self.assertIn('last_activity_at: 2026-04-29T10:01:00Z', output)
         self.assertIn('permission_stats: allow=3 deny=1 ask=2', output)
         self.assertIn('todo_state:\n[x] inspect repo', output)
         self.assertIn('recent_tools:\n- read_file [ok] permission=allow', output)
         self.assertIn('runtime_config:\nprovider: anthropic', output)
+
+    def test_should_render_session_header_with_counts(self) -> None:
+        state = SessionState(
+            session_id='s1',
+            workspace_root='D:/workspace/Anvil',
+            goal='inspect runtime',
+            status='active',
+            created_at='2026-04-29T10:00:00Z',
+            updated_at='2026-04-29T10:01:00Z',
+            turn_count=3,
+            message_count=7,
+            command_count=2,
+            step_count=5,
+        )
+        output = render_session_header(state, runtime_label='interactive')
+        self.assertIn('Anvil interactive session s1', output)
+        self.assertIn('workspace: D:/workspace/Anvil', output)
+        self.assertIn('turns=3 messages=7 commands=2 steps=5', output)
 
     def test_should_render_tool_overview_grouped_by_capability(self) -> None:
         output = render_tool_overview(builtin_tool_specs())

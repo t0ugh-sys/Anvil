@@ -20,6 +20,19 @@ class CommandResult:
     should_continue: bool = True
 
 
+def render_session_header(
+    state: SessionState,
+    *,
+    runtime_label: str = 'interactive',
+) -> str:
+    return (
+        f'Anvil {runtime_label} session {state.session_id}\n'
+        f'workspace: {state.workspace_root}\n'
+        f'turns={state.turn_count} messages={state.message_count} '
+        f'commands={state.command_count} steps={state.step_count}'
+    )
+
+
 def render_session_status(
     state: SessionState,
     *,
@@ -50,6 +63,11 @@ def render_session_status(
         f'workspace: {state.workspace_root}\n'
         f'goal: {state.goal or "(empty)"}\n'
         f'status: {state.status}\n'
+        f'turn_count: {state.turn_count}\n'
+        f'message_count: {state.message_count}\n'
+        f'command_count: {state.command_count}\n'
+        f'step_count: {state.step_count}\n'
+        f'last_activity_at: {state.last_activity_at or state.updated_at}\n'
         f'memory_run_dir: {state.memory_run_dir or "(empty)"}\n'
         f'artifacts_dir: {state.artifacts_dir or "(empty)"}\n'
         f'permission_stats: allow={state.permission_stats.get("allow", 0)} '

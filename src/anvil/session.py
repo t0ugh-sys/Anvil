@@ -28,6 +28,11 @@ class SessionState:
     memory_run_dir: str = ''
     artifacts_dir: str = ''
     last_summary: str = ''
+    turn_count: int = 0
+    message_count: int = 0
+    command_count: int = 0
+    step_count: int = 0
+    last_activity_at: str = ''
     permission_stats: dict[str, int] = field(default_factory=lambda: {'allow': 0, 'deny': 0, 'ask': 0})
 
     def to_dict(self) -> Dict[str, object]:
@@ -46,6 +51,11 @@ class SessionState:
             'memory_run_dir': self.memory_run_dir,
             'artifacts_dir': self.artifacts_dir,
             'last_summary': self.last_summary,
+            'turn_count': self.turn_count,
+            'message_count': self.message_count,
+            'command_count': self.command_count,
+            'step_count': self.step_count,
+            'last_activity_at': self.last_activity_at,
             'permission_stats': dict(self.permission_stats),
         }
 
@@ -70,6 +80,11 @@ class SessionState:
             memory_run_dir=str(payload.get('memory_run_dir', '')),
             artifacts_dir=str(payload.get('artifacts_dir', '')),
             last_summary=str(payload.get('last_summary', '')),
+            turn_count=int(payload.get('turn_count', 0) or 0),
+            message_count=int(payload.get('message_count', 0) or 0),
+            command_count=int(payload.get('command_count', 0) or 0),
+            step_count=int(payload.get('step_count', 0) or 0),
+            last_activity_at=str(payload.get('last_activity_at', '')),
             permission_stats={
                 str(key): int(value)
                 for key, value in dict(payload.get('permission_stats', {'allow': 0, 'deny': 0, 'ask': 0})).items()
@@ -110,6 +125,7 @@ class SessionStore:
             status='active',
             created_at=now,
             updated_at=now,
+            last_activity_at=now,
             memory_run_dir=str(memory_run_dir),
             artifacts_dir=artifacts_dir,
         )
@@ -163,11 +179,15 @@ class SessionStore:
 
     def _update_state_from_event(self, event: str, payload: Dict[str, Any]) -> None:
         self.state.updated_at = utc_now_iso()
+        self.state.last_activity_at = self.state.updated_at
         if event == 'run_started':
             goal = payload.get('goal')
             if isinstance(goal, str) and goal.strip():
                 self.state.goal = goal
                 self.state.status = 'active'
+        if event == 'chat_command':
+            self.state.command_count += 1
+            self.state.status = 'active'
         if event in {'chat_user', 'chat_assistant'}:
             content = payload.get('content')
             role = payload.get('role')
@@ -176,7 +196,11 @@ class SessionStore:
                 self.state.history_tail.append(prefix + content)
                 self.state.history_tail = self.state.history_tail[-20:]
                 self.state.status = 'active'
+                self.state.message_count += 1
+                if event == 'chat_user':
+                    self.state.turn_count += 1
         if event == 'step_succeeded':
+            self.state.step_count += 1
             output = payload.get('output')
             if isinstance(output, str) and output:
                 self.state.history_tail.append(output)

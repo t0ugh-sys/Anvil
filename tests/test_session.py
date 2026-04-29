@@ -39,6 +39,8 @@ class SessionStoreTests(unittest.TestCase):
                 session_id='sess-1',
             )
             store.record_permission_cache({'write_file:write': 'deny'})
+            store.append_event('chat_command', {'command': 'status', 'argument': ''})
+            store.append_event('chat_user', {'role': 'user', 'content': 'inspect runtime'})
             store.append_event(
                 'step_succeeded',
                 {
@@ -66,6 +68,11 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(restored.state.history_tail[-1], 'continue')
             self.assertEqual(restored.state.permission_cache['write_file:write'], 'deny')
             self.assertEqual(restored.state.last_summary, 'summary text')
+            self.assertEqual(restored.state.command_count, 1)
+            self.assertEqual(restored.state.turn_count, 1)
+            self.assertEqual(restored.state.message_count, 1)
+            self.assertEqual(restored.state.step_count, 1)
+            self.assertTrue(restored.state.last_activity_at)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
