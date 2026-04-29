@@ -1,6 +1,6 @@
-# LoopAgent
+# Anvil
 
-LoopAgent is a tool-use feedback loop framework. The core pattern is:
+Anvil is a tool-use coding agent runtime. The core pattern is:
 
 ```text
 while model_is_calling_tools:
@@ -34,7 +34,7 @@ Key rule: the loop stays stable; tools and routing evolve independently.
 - Tool-use feedback loop as the primary runtime model
 - Stdlib-only core in `src/loop_agent/`
 - Iterative agent loop with max-step, timeout, and cancellation stop conditions
-- Structured run artifacts in `.loopagent/runs/<run_id>/`
+- Structured run artifacts in `.anvil/runs/<run_id>/`
 - Configurable model providers for mock, OpenAI-compatible, Anthropic, and Gemini flows
 - Built-in tools for files, commands, memory analysis, git, and GitHub CLI workflows
 - `unittest`-based test suite that runs without pytest
@@ -42,10 +42,10 @@ Key rule: the loop stays stable; tools and routing evolve independently.
 ## Version Requirements
 
 - Python library/runtime: Python 3.10+
-- Node wrapper (`loopagent` from npm): Python 3.11+ available on `PATH`
+- Node wrapper (`anvil` from npm): Python 3.11+ available on `PATH`
 - Node.js: 18+
 
-The npm wrapper bootstraps a local virtual environment under `~/.loopagent/npm-bridge/` and installs the Python package there.
+The npm wrapper bootstraps a local virtual environment under `~/.anvil/npm-bridge/` and installs the Python package there.
 
 ## Quick Start
 
@@ -61,8 +61,8 @@ python -m loop_agent.cli --goal "write a one-line self introduction" --strategy 
 
 ```bash
 npm i -g git+https://github.com/t0ugh-sys/LoopAgent.git
-loopagent tools
-loopagent code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
+anvil tools
+anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
 
 If you have multiple Python installations, set `LOOPAGENT_PYTHON` before the first npm-backed run.
@@ -81,11 +81,11 @@ python -m loop_agent.cli --goal-file goal.txt --strategy json_stub --max-steps 1
 ### Agent CLI
 
 ```bash
-python -m loop_agent.agent_cli tools
-python -m loop_agent.agent_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
+anvil tools
+anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
 
-The `agent_cli` entrypoint is the direct CLI surface of the core loop:
+The `anvil` entrypoint is the direct CLI surface of the core loop:
 
 ```text
 model decides -> tool calls execute -> tool results feed back -> stop or continue
@@ -94,14 +94,14 @@ model decides -> tool calls execute -> tool results feed back -> stop or continu
 Useful first commands:
 
 ```bash
-python -m loop_agent.agent_cli --help
-python -m loop_agent.agent_cli code --help
-python -m loop_agent.agent_cli tools
+anvil --help
+anvil code --help
+anvil tools
 ```
 
 ## Visible Progress
 
-LoopAgent can keep a visible todo list inside the same tool-use loop.
+Anvil can keep a visible todo list inside the same tool-use loop.
 
 - The model updates progress through the `todo_write` tool
 - The runtime stores todo state in `ToolUseState`
@@ -203,10 +203,10 @@ python -m loop_agent.cli --goal "answer in json protocol" --strategy json_llm --
 
 ## Run Recording and Memory
 
-LoopAgent records run data by default.
+Anvil records run data by default.
 
 - Run records: `runs/<timestamp>/`
-- Memory root: `.loopagent/runs/<run_id>/`
+- Memory root: `.anvil/runs/<run_id>/`
 - Event stream: `events.jsonl`
 - Snapshot state: `state.json`
 - Summary: `summary.json`
@@ -243,7 +243,7 @@ Built-in skills:
 | `commands` | Run shell commands | none |
 | `browser` | Browser automation | `playwright` |
 
-LoopAgent uses two-layer skill injection:
+Anvil uses two-layer skill injection:
 
 - Layer 1: only skill `name + description` goes into the prompt
 - Layer 2: full skill instructions are loaded on demand through `load_skill`
@@ -251,7 +251,7 @@ LoopAgent uses two-layer skill injection:
 Load specific skills:
 
 ```bash
-python -m loop_agent.agent_cli code --goal "search for info" --skill web_search --skill memory
+anvil code --goal "search for info" --skill web_search --skill memory
 ```
 
 ## Project Layout
@@ -269,7 +269,7 @@ python -m loop_agent.agent_cli code --goal "search for info" --skill web_search 
 - `src/loop_agent/ui/`: optional chat-oriented TUI entrypoints
 - `tests/`: unit tests
 - `examples/`: optional demos and integrations
-- `bin/loopagent.js`: npm bridge entrypoint
+- `bin/loopagent.js`: npm bridge entrypoint for `anvil` and `loopagent`
 - `.github/workflows/tests.yml`: Python test workflow
 - `.github/workflows/release.yml`: npm release workflow
 
@@ -285,4 +285,4 @@ npm pack --dry-run
 
 - The core engine returns `stop_reason=step_error` instead of crashing the process when a step raises.
 - `requirements.txt` is only used as an examples/extension placeholder.
-- `npm i -g @t0ugh-sys/loopagent` works only after the package has been published to npm.
+- `npm i -g @t0ugh-sys/anvil` works only after the package has been published to npm.

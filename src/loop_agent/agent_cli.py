@@ -12,18 +12,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from .agent_protocol import render_agent_step_schema
 from .coding_agent import run_coding_agent
 from .compression import CompressionConfig, summarize_entries_deterministically
-from .core.serialization import run_result_to_dict
-from .core.types import ContextSnapshot, ObserverFn, StopConfig
+from .core.types import StopConfig
 from .llm.providers import build_invoke_from_args
-from .memory.jsonl_store import JsonlMemoryStore
 from .ops.doctor import format_doctor_report, run_provider_doctor
-from .run_recorder import RunRecorder
+from .runtime import CodeRuntime
 from .skills import SkillLoader, list_skills, get_skill
 from .task_graph import Task
 from .task_store import TaskStore
 from .team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
 from .tool_use_loop import DeciderFn
-from .tools import build_default_tools
+from .tools import build_default_tools, builtin_tool_specs
 
 
 def _default_run_id() -> str:
@@ -33,7 +31,52 @@ def _default_run_id() -> str:
 def _resolve_goal(args: argparse.Namespace) -> str:
     if args.goal_file:
         return Path(args.goal_file).read_text(encoding='utf-8-sig').strip()
-    return args.goal.strip()
+    return str(getattr(args, 'goal', '') or '').strip()
+
+
+def _build_coding_prompt(
+    *,
+    goal: str,
+    history: Tuple[str, ...],
+    tool_results: Tuple[Any, ...],
+    state_summary: Dict[str, object],
+    last_steps: Tuple[str, ...],
+    history_window: int,
+    skills: SkillLoader | None = None,
+) -> str:
+    skill_lines: List[str] = []
+    if skills is not None:
+        for item in skills.metadata():
+            skill_lines.append(f'- {item["name"]}: {item["description"]}')
+    return (
+        'You are a coding agent. Return strict JSON matching schema.\n'
+        'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
+        + ('Available skills:\n' + '\n'.join(skill_lines) + '\n' if skill_lines else '')
+        + 'Do not inline full skill instructions in the prompt. Load them on demand with load_skill.\n'
+        + render_agent_step_schema()
+        + '\nGoal:\n'
+        + goal
+        + '\nHistory:\n'
+        + str(list(history[-history_window:]))
+        + '\nStateSummary:\n'
+        + json.dumps(state_summary, ensure_ascii=False)
+        + '\nLastSteps:\n'
+        + str(list(last_steps))
+        + '\nToolResults:\n'
+        + str(
+            [
+                {
+                    'id': r.id,
+                    'ok': r.ok,
+                    'output': r.output[:500],
+                    'error': r.error,
+                    'permission_decision': getattr(r, 'metadata', {}).get('permission_decision'),
+                }
+                for r in tool_results
+            ]
+        )
+        + '\nOnly output JSON.'
+    )
 
 
 def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None) -> DeciderFn:
@@ -49,27 +92,14 @@ def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None =
         last_steps: Tuple[str, ...],
     ) -> str:
         history_window = max(1, args.history_window)
-        skill_lines: List[str] = []
-        if skills is not None:
-            for item in skills.metadata():
-                skill_lines.append(f'- {item["name"]}: {item["description"]}')
-        prompt = (
-            'You are a coding agent. Return strict JSON matching schema.\n'
-            'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
-            + ('Available skills:\n' + '\n'.join(skill_lines) + '\n' if skill_lines else '')
-            + 'Do not inline full skill instructions in the prompt. Load them on demand with load_skill.\n'
-            + render_agent_step_schema()
-            + '\nGoal:\n'
-            + goal
-            + '\nHistory:\n'
-            + str(list(history[-history_window:]))
-            + '\nStateSummary:\n'
-            + json.dumps(state_summary, ensure_ascii=False)
-            + '\nLastSteps:\n'
-            + str(list(last_steps))
-            + '\nToolResults:\n'
-            + str([{'id': r.id, 'ok': r.ok, 'output': r.output[:500], 'error': r.error} for r in tool_results])
-            + '\nOnly output JSON.'
+        prompt = _build_coding_prompt(
+            goal=goal,
+            history=history,
+            tool_results=tool_results,
+            state_summary=state_summary,
+            last_steps=last_steps,
+            history_window=history_window,
+            skills=skills,
         )
         return invoke(prompt)
 
@@ -122,91 +152,31 @@ def _load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
     return loader
 
 
-def _build_jsonl_observer(path: str) -> ObserverFn:
-    def observer(event: str, payload: Dict[str, Any]) -> None:
-        record = {'event': event, 'payload': payload}
-        with open(path, 'a', encoding='utf-8') as file:
-            file.write(json.dumps(record, ensure_ascii=False))
-            file.write('\n')
-
-    return observer
-
-
-def _merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn]:
-    active = [item for item in observers if item is not None]
-    if not active:
-        return None
-
-    def merged(event: str, payload: Dict[str, Any]) -> None:
-        for observer in active:
-            observer(event, payload)
-
-    return merged
-
-
 def _run_code_command(args: argparse.Namespace) -> int:
     goal = _resolve_goal(args)
-    workspace_root = Path(args.workspace).resolve()
-    task_store = TaskStore((workspace_root / args.tasks_dir).resolve()) if args.tasks_dir else None
-    compression_config = CompressionConfig(
-        micro_keep_last_results=args.micro_compact_keep,
-        max_context_tokens=args.max_context_tokens,
-        recent_transcript_entries=args.recent_transcript_entries,
-    )
-    transcripts_dir = (workspace_root / args.transcripts_dir).resolve() if args.transcripts_dir else None
-    run_id = args.run_id or _default_run_id()
-    memory_run_dir = Path(args.memory_dir) / run_id
-    memory_store = JsonlMemoryStore(memory_dir=memory_run_dir, summarize_every=args.summarize_every)
-    memory_store.on_event('run_started', {'goal': goal, 'strategy': 'coding', 'facts': []})
-
-    recorder: Optional[RunRecorder] = None
-    observers: List[ObserverFn] = []
-    if args.observer_file:
-        observers.append(_build_jsonl_observer(args.observer_file))
-    if args.record_run:
-        recorder = RunRecorder.create(base_dir=Path(args.runs_dir))
-        observers.append(recorder.write_event)
-    observers.append(memory_store.on_event)
-    observer = _merge_observers(observers)
-
-    def context_provider() -> ContextSnapshot:
-        context = memory_store.load_context(goal=goal, last_k_steps=args.history_window)
-        return ContextSnapshot(state_summary=context.state_summary, last_steps=context.last_steps)
-
+    runtime = CodeRuntime(args, goal=goal)
+    if not runtime.goal.strip():
+        raise ValueError('goal is required unless resuming from a session with a stored goal')
     skills = _load_skills_from_args(args)
     decider = _build_coding_decider(args, skills)
     summarizer = _build_coding_summarizer(args)
+    if runtime.observer is not None:
+        runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
     result = run_coding_agent(
-        goal=goal,
+        goal=runtime.goal,
         decider=decider,
-        workspace_root=workspace_root,
+        workspace_root=runtime.workspace_root,
         stop=StopConfig(max_steps=args.max_steps, max_elapsed_s=args.timeout_s),
-        observer=observer,
-        context_provider=context_provider,
+        observer=runtime.observer,
+        context_provider=runtime.build_context_provider(),
         skills=skills,
-        task_store=task_store,
-        compression_config=compression_config,
-        transcripts_dir=transcripts_dir,
+        policy=runtime.build_policy(),
+        task_store=runtime.task_store,
+        compression_config=runtime.compression_config,
+        transcripts_dir=runtime.transcripts_dir,
         summarizer=summarizer,
     )
-    memory_store.on_event(
-        'run_finished',
-        {'done': result.done, 'stop_reason': result.stop_reason.value, 'steps': result.steps},
-    )
-    if recorder is not None:
-        recorder.write_summary(run_result_to_dict(result, include_history=True))
-
-    memory_context = memory_store.load_context(goal=goal, last_k_steps=args.history_window)
-
-    payload = run_result_to_dict(result, include_history=args.include_history)
-    payload['workspace'] = str(workspace_root)
-    payload['provider'] = args.provider
-    payload['model'] = args.model
-    payload['memory_state'] = memory_context.state_summary
-    payload['memory_last_steps'] = list(memory_context.last_steps)
-    payload['memory_run_dir'] = str(memory_run_dir)
-    if recorder is not None:
-        payload['run_dir'] = str(recorder.run_dir)
+    payload = runtime.finalize(result)
     if args.output == 'json':
         print(json.dumps(payload, ensure_ascii=False))
     else:
@@ -214,9 +184,10 @@ def _run_code_command(args: argparse.Namespace) -> int:
         print(f"stop_reason: {result.stop_reason.value}")
         print(f"steps: {result.steps}")
         print(f"final_output: {result.final_output}")
-        print(f"memory_run_dir: {memory_run_dir}")
-        if recorder is not None:
-            print(f"run_dir: {recorder.run_dir}")
+        print(f"session_id: {payload['session_id']}")
+        print(f"memory_run_dir: {payload['memory_run_dir']}")
+        if 'run_dir' in payload:
+            print(f"run_dir: {payload['run_dir']}")
     return 0 if result.done else 1
 
 
@@ -430,7 +401,13 @@ def _run_team_shutdown_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_tools_command(_: argparse.Namespace) -> int:
+def _run_tools_command(args: argparse.Namespace) -> int:
+    specs = sorted(builtin_tool_specs(), key=lambda item: item.name)
+    if getattr(args, 'verbose', False):
+        for item in specs:
+            capabilities = ','.join(cap.value for cap in item.capabilities) or 'none'
+            print(f'{item.name}: {item.description} [{capabilities}] risk={item.risk_level.value}')
+        return 0
     names = sorted(build_default_tools().keys())
     print('\n'.join(names))
     return 0
@@ -450,7 +427,11 @@ def _run_skills_command(_: argparse.Namespace) -> int:
 
 
 def _run_replay_command(args: argparse.Namespace) -> int:
-    events_file = Path(args.events_file)
+    events_file_value = getattr(args, 'events_file', '')
+    if getattr(args, 'session_id', ''):
+        events_file = Path(args.sessions_dir) / args.session_id / 'events.jsonl'
+    else:
+        events_file = Path(events_file_value)
     if not events_file.exists():
         print(f'events file not found: {events_file}')
         return 1
@@ -477,8 +458,8 @@ def _run_doctor_command(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog='agent_cli',
-        description='Run LoopAgent as a tool-use feedback loop: model decides, tools execute, results feed back.',
+        prog='anvil',
+        description='Run Anvil as a tool-use feedback loop: model decides, tools execute, results feed back.',
         formatter_class=argparse.RawTextHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest='command', required=True)
@@ -489,15 +470,15 @@ def build_parser() -> argparse.ArgumentParser:
         description='Run the coding runtime as a tool-use feedback loop over a workspace.',
         epilog=(
             'Examples:\n'
-            '  agent_cli code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3\n'
-            '  agent_cli code --goal-file goal.txt --workspace . --provider openai_compatible --model gpt-5.3-codex \\\n'
+            '  anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3\n'
+            '  anvil code --goal-file goal.txt --workspace . --provider openai_compatible --model gpt-5.3-codex \\\n'
             '    --base-url https://codex-api.packycode.com/v1 --wire-api responses --output json\n'
-            '  agent_cli code --goal "search docs then summarize" --workspace . --skill web_search --skill memory\n'
-            '  agent_cli code --goal "fix tests" --workspace . --observer-file events.jsonl --memory-dir .loopagent/runs\n'
+            '  anvil code --goal "search docs then summarize" --workspace . --skill web_search --skill memory\n'
+            '  anvil code --goal "fix tests" --workspace . --observer-file events.jsonl --memory-dir .anvil/runs\n'
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    goal_group = code.add_mutually_exclusive_group(required=True)
+    goal_group = code.add_mutually_exclusive_group(required=False)
     goal_group.add_argument('--goal', help='Direct goal text for the tool-use loop')
     goal_group.add_argument('--goal-file', help='UTF-8 goal file for the tool-use loop')
 
@@ -507,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     execution_group.add_argument('--timeout-s', type=float, default=120.0, help='Maximum elapsed seconds for the run')
     execution_group.add_argument('--output', choices=['text', 'json'], default='text')
     execution_group.add_argument('--include-history', action='store_true')
+    execution_group.add_argument('--session-id', default='', help='Resume or append to an existing session id')
+    execution_group.add_argument('--sessions-dir', default='.anvil/sessions', help='Root directory for persisted sessions')
+    execution_group.add_argument('--permission-mode', choices=['strict', 'balanced', 'unsafe'], default='balanced')
 
     provider_group = code.add_argument_group('provider')
     provider_group.add_argument(
@@ -535,12 +519,12 @@ def build_parser() -> argparse.ArgumentParser:
     memory_group = code.add_argument_group('memory and artifacts')
     memory_group.add_argument('--history-window', type=int, default=8, help='How many recent loop outputs to feed back')
     memory_group.add_argument('--observer-file', help='Write observer events as JSONL')
-    memory_group.add_argument('--memory-dir', default='.loopagent/runs', help='Persistent memory root for run state')
+    memory_group.add_argument('--memory-dir', default='.anvil/runs', help='Persistent memory root for run state')
     memory_group.add_argument('--run-id', help='Optional run id for memory and artifacts')
     memory_group.add_argument('--summarize-every', type=int, default=5, help='Refresh memory summary every N rounds')
     memory_group.add_argument('--record-run', action='store_true', default=True)
     memory_group.add_argument('--no-record-run', action='store_false', dest='record_run')
-    memory_group.add_argument('--runs-dir', default='.loopagent/runs', help='Directory for structured run artifacts')
+    memory_group.add_argument('--runs-dir', default='.anvil/runs', help='Directory for structured run artifacts')
     memory_group.add_argument('--tasks-dir', default='.tasks', help='Workspace-relative task graph directory injected into context')
     memory_group.add_argument('--transcripts-dir', default='.transcripts', help='Workspace-relative archive directory for compacted transcripts')
     memory_group.add_argument('--max-context-tokens', type=int, default=50000, help='Auto-compact when estimated context exceeds this budget')
@@ -561,6 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='list tools exposed to the loop',
         description='List tool handlers available to the coding tool-use loop.',
     )
+    tools.add_argument('--verbose', action='store_true', help='Show tool descriptions and capability metadata')
     tools.set_defaults(handler=_run_tools_command)
 
     skills_parser = subparsers.add_parser(
@@ -575,7 +560,9 @@ def build_parser() -> argparse.ArgumentParser:
         help='print recorded loop events',
         description='Print a recorded JSONL event stream for a previous tool-use run.',
     )
-    replay.add_argument('--events-file', required=True)
+    replay.add_argument('--events-file', default='')
+    replay.add_argument('--session-id', default='')
+    replay.add_argument('--sessions-dir', default='.anvil/sessions')
     replay.set_defaults(handler=_run_replay_command)
 
     team = subparsers.add_parser(

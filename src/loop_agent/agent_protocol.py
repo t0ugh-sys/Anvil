@@ -18,6 +18,7 @@ class ToolResult:
     ok: bool
     output: str
     error: Optional[str ] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

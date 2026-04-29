@@ -78,7 +78,7 @@ def run_provider_doctor(
 
     headers = {
         'Accept': 'application/json',
-        'User-Agent': 'LoopAgent/0.1 doctor',
+        'User-Agent': 'Anvil/0.1 doctor',
     }
     headers.update(parse_provider_headers(extra_headers))
 

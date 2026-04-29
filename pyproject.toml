@@ -1,14 +1,14 @@
 [project]
-name = "LoopAgent"
+name = "Anvil"
 version = "0.1.0"
-description = "Loop-oriented agent framework with a stdlib-only Python core."
+description = "Tool-use coding agent runtime with a stdlib-only Python core."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "LoopAgent Contributors" },
+    { name = "Anvil Contributors" },
 ]
-keywords = ["agent", "ai", "loop", "llm", "claude", "gemini", "openai"]
+keywords = ["agent", "ai", "runtime", "coding", "llm", "claude", "gemini", "openai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -28,6 +28,9 @@ dev = []
 tui = ["textual>=0.86.2"]
 
 [project.scripts]
+anvil = "loop_agent.agent_cli:main"
+anvil-core = "loop_agent.cli:main"
+anvil-chat = "loop_agent.ui.tui_chat:main"
 loopagent = "loop_agent.cli:main"
 
 [project.urls]

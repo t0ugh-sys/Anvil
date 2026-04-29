@@ -1,16 +1,16 @@
 """
-Configuration system for LoopAgent
+Configuration system for Anvil
 
 Supports YAML, JSON, and .env configuration files.
 
 Usage:
     # Create config.yaml
-    # Run with config: loopagent --config config.yaml
+    # Run with config: anvil --config config.yaml
     
     # Or use default locations:
-    # - ./loopagent.yaml
-    # - ./loopagent.json
-    # - ~/.loopagent/config.yaml
+    # - ./anvil.yaml
+    # - ./anvil.json
+    # - ~/.anvil/config.yaml
 """
 
 from __future__ import annotations
@@ -60,7 +60,9 @@ def load_env_config(path: PathLike) -> Dict[str, Any]:
                 key = key.strip()
                 value = value.strip().strip('"').strip("'")
                 # Map to config keys
-                if key.startswith('LOOPAGENT_'):
+                if key.startswith('ANVIL_'):
+                    config[key[6:].lower()] = value
+                elif key.startswith('LOOPAGENT_'):
                     config[key[10:].lower()] = value
                 elif key.startswith('OPENAI_'):
                     config[key.lower()] = value
@@ -73,6 +75,12 @@ def load_env_config(path: PathLike) -> Dict[str, Any]:
 
 # Default config locations
 DEFAULT_CONFIG_LOCATIONS = [
+    './anvil.yaml',
+    './anvil.yml',
+    './anvil.json',
+    './.anvil.yaml',
+    './.anvil.yml',
+    './.anvil.json',
     './loopagent.yaml',
     './loopagent.yml',
     './loopagent.json',
@@ -89,9 +97,13 @@ def find_default_config() -> Optional[Path]:
         if path.exists():
             return path
     # Check home directory
-    home_config = Path.home() / '.loopagent' / 'config.yaml'
-    if home_config.exists():
-        return home_config
+    home_candidates = [
+        Path.home() / '.anvil' / 'config.yaml',
+        Path.home() / '.loopagent' / 'config.yaml',
+    ]
+    for home_config in home_candidates:
+        if home_config.exists():
+            return home_config
     return None
 
 

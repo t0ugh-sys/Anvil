@@ -67,7 +67,7 @@ class WorktreeManager:
         return result.returncode == 0
 
     def _create_copy_workspace(self, target: Path) -> None:
-        ignored_names = {'.git', '__pycache__', '.pytest_cache', '.mypy_cache', '.loopagent', 'runs'}
+        ignored_names = {'.git', '__pycache__', '.pytest_cache', '.mypy_cache', '.loopagent', '.anvil', 'runs'}
         try:
             relative_root = self.root_dir.resolve().relative_to(self.source_root)
             ignored_names.add(relative_root.parts[0])

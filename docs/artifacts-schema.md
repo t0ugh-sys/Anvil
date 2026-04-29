@@ -1,6 +1,6 @@
 # Run Artifacts Schema
 
-This document describes the on-disk artifacts produced by LoopAgent runs.
+This document describes the on-disk artifacts produced by Anvil runs.
 
 Goals:
 - Make run outputs stable to parse (CI, dashboards, replay tools).
@@ -10,7 +10,7 @@ Goals:
 
 By default, runs are written under:
 
-- `.loopagent/runs/<run_id>/`
+- `.anvil/runs/<run_id>/`
 
 Where `<run_id>` is a UTC timestamp like `20260306T010203Z`.
 
