@@ -1,6 +1,6 @@
 # Anvil
 
-Anvil is a tool-use coding agent runtime. The core pattern is:
+Anvil is a terminal-first coding agent runtime shaped more like Claude Code. The core pattern is:
 
 ```text
 while model_is_calling_tools:
@@ -9,8 +9,8 @@ while model_is_calling_tools:
     append tool results
 ```
 
-Everything else in the project layers on top of that loop: policy, memory, hooks,
-task graphs, subagents, worktree isolation, and scheduling.
+Everything else in the project layers on top of that loop: session runtime, permissions,
+commands, memory, task graphs, subagents, worktree isolation, and scheduling.
 
 The loop itself does not change when tools grow. We only extend the tool array and
 dispatch map:
@@ -27,11 +27,13 @@ dispatch map:
                                 +------------------+
 ```
 
-Key rule: the loop stays stable; tools and routing evolve independently.
+Key rule: the loop stays stable; the runtime layers around it can evolve independently.
 
 ## Highlights
 
-- Tool-use feedback loop as the primary runtime model
+- Terminal-first interactive runtime by default
+- Claude Code-style internal layering: `entrypoints/`, `services/`, `commands/`
+- Tool-use feedback loop as the primary execution model
 - Stdlib-only core in `src/anvil/`
 - Iterative agent loop with max-step, timeout, and cancellation stop conditions
 - Structured run artifacts in `.anvil/runs/<run_id>/`
@@ -89,7 +91,7 @@ anvil tools
 anvil code --goal "inspect README then finish" --workspace . --provider mock --model mock-v3 --output json
 ```
 
-The default `anvil` entrypoint now starts an interactive session-first runtime. It persists chat state under `.anvil/sessions/<session_id>/` and supports basic slash commands:
+The default `anvil` entrypoint starts an interactive session-first runtime. It persists chat state under `.anvil/sessions/<session_id>/` and supports basic slash commands:
 
 ```text
 /help
@@ -113,6 +115,16 @@ anvil --help
 anvil code --help
 anvil tools
 ```
+
+## Runtime Layout
+
+The codebase is now organized more like a terminal coding product runtime than a flat loop library:
+
+- `src/anvil/entrypoints/`: top-level command entrypoints
+- `src/anvil/services/`: session, chat, and coding runtime orchestration
+- `src/anvil/commands/`: slash-command parsing and execution
+- `src/anvil/tools.py` and tool metadata modules: tool dispatch layer
+- `src/anvil/core/`: lower-level reusable agent primitives
 
 ## Visible Progress
 

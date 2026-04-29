@@ -1,40 +1,25 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .agent_protocol import render_agent_step_schema
-from .chat_runtime import InteractiveRuntime
-from .coding_agent import run_coding_agent
-from .compression import CompressionConfig, summarize_entries_deterministically
-from .core.types import StopConfig
 from .llm.providers import build_invoke_from_args
 from .ops.doctor import format_doctor_report, run_provider_doctor
-from .runtime import CodeRuntime
-from .session import SessionStore
-from .skills import SkillLoader, list_skills, get_skill
+from .services import coding_runtime as _coding_runtime
+from .services.session_runtime import should_launch_interactive as _should_launch_interactive
+from .skills import get_skill, list_skills
 from .task_graph import Task
-from .task_store import TaskStore
 from .team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
-from .tool_use_loop import DeciderFn
 from .tools import build_default_tools, builtin_tool_specs
 
 
 def _default_run_id() -> str:
     return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-
-
-def _resolve_goal(args: argparse.Namespace) -> str:
-    if args.goal_file:
-        return Path(args.goal_file).read_text(encoding='utf-8-sig').strip()
-    return str(getattr(args, 'goal', '') or '').strip()
 
 
 def _build_coding_prompt(
@@ -45,274 +30,43 @@ def _build_coding_prompt(
     state_summary: Dict[str, object],
     last_steps: Tuple[str, ...],
     history_window: int,
-    skills: SkillLoader | None = None,
+    skills=None,
 ) -> str:
-    skill_lines: List[str] = []
-    if skills is not None:
-        for item in skills.metadata():
-            skill_lines.append(f'- {item["name"]}: {item["description"]}')
-    return (
-        'You are a coding agent. Return strict JSON matching schema.\n'
-        'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
-        + ('Available skills:\n' + '\n'.join(skill_lines) + '\n' if skill_lines else '')
-        + 'Do not inline full skill instructions in the prompt. Load them on demand with load_skill.\n'
-        + render_agent_step_schema()
-        + '\nGoal:\n'
-        + goal
-        + '\nHistory:\n'
-        + str(list(history[-history_window:]))
-        + '\nStateSummary:\n'
-        + json.dumps(state_summary, ensure_ascii=False)
-        + '\nLastSteps:\n'
-        + str(list(last_steps))
-        + '\nToolResults:\n'
-        + str(
-            [
-                {
-                    'id': r.id,
-                    'ok': r.ok,
-                    'output': r.output[:500],
-                    'error': r.error,
-                    'permission_decision': getattr(r, 'metadata', {}).get('permission_decision'),
-                }
-                for r in tool_results
-            ]
-        )
-        + '\nOnly output JSON.'
+    return _coding_runtime.build_coding_prompt(
+        goal=goal,
+        history=history,
+        tool_results=tool_results,
+        state_summary=state_summary,
+        last_steps=last_steps,
+        history_window=history_window,
+        skills=skills,
     )
 
 
-def _build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None) -> DeciderFn:
-    from .tool_use_loop import DeciderFn
-
-    invoke = build_invoke_from_args(args, mode='coding')
-
-    def decider(
-        goal: str,
-        history: Tuple[str, ...],
-        tool_results: Tuple[Any, ...],
-        state_summary: Dict[str, object],
-        last_steps: Tuple[str, ...],
-    ) -> str:
-        history_window = max(1, args.history_window)
-        prompt = _build_coding_prompt(
-            goal=goal,
-            history=history,
-            tool_results=tool_results,
-            state_summary=state_summary,
-            last_steps=last_steps,
-            history_window=history_window,
-            skills=skills,
-        )
-        return invoke(prompt)
-
-    return decider
+def _build_coding_decider(args: argparse.Namespace, skills=None):
+    original = _coding_runtime.build_invoke_from_args
+    _coding_runtime.build_invoke_from_args = build_invoke_from_args
+    try:
+        return _coding_runtime.build_coding_decider(args, skills)
+    finally:
+        _coding_runtime.build_invoke_from_args = original
 
 
-def _build_coding_summarizer(args: argparse.Namespace) -> Optional[SummarizerFn]:
-    from .compression import TranscriptEntry
-    from .tool_use_loop import SummarizerFn
-
-    if str(args.provider) == 'mock':
-        return None
-
-    invoke = build_invoke_from_args(args, mode='coding')
-
-    def summarizer(goal: str, previous_summary: str, transcript: Tuple[TranscriptEntry, ...]) -> str:
-        transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
-        prompt = (
-            'Summarize the coding-agent conversation for long-running context compression.\n'
-            'Return plain text only.\n'
-            'Keep: user goal, constraints, files changed, tool outcomes, unfinished work.\n'
-            f'Goal:\n{goal}\n'
-            f'Previous summary:\n{previous_summary or "none"}\n'
-            'Recent transcript:\n'
-            + '\n'.join(transcript_lines)
-        )
-        response = invoke(prompt).strip()
-        if response:
-            return response
-        return summarize_entries_deterministically(goal=goal, previous_summary=previous_summary, entries=transcript)
-
-    return summarizer
+def _build_coding_summarizer(args: argparse.Namespace):
+    original = _coding_runtime.build_invoke_from_args
+    _coding_runtime.build_invoke_from_args = build_invoke_from_args
+    try:
+        return _coding_runtime.build_coding_summarizer(args)
+    finally:
+        _coding_runtime.build_invoke_from_args = original
 
 
-def _load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
-    """Load skills from command-line arguments."""
-    skills_arg = getattr(args, 'skills', None)
-    if not skills_arg:
-        return None
-    
-    loader = SkillLoader()
-    for skill_name in skills_arg:
-        if skill_name == 'all':
-            # Load all built-in skills
-            for name in list_skills():
-                loader.load(name)
-        else:
-            if not loader.load(skill_name):
-                print(f"Warning: Unknown skill '{skill_name}' - skipping")
-    return loader
+def _load_skills_from_args(args: argparse.Namespace):
+    return _coding_runtime.load_skills_from_args(args)
 
 
 def _run_code_command(args: argparse.Namespace) -> int:
-    goal = _resolve_goal(args)
-    runtime = CodeRuntime(args, goal=goal)
-    if not runtime.goal.strip():
-        raise ValueError('goal is required unless resuming from a session with a stored goal')
-    skills = _load_skills_from_args(args)
-    decider = _build_coding_decider(args, skills)
-    summarizer = _build_coding_summarizer(args)
-    if runtime.observer is not None:
-        runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
-    result = run_coding_agent(
-        goal=runtime.goal,
-        decider=decider,
-        workspace_root=runtime.workspace_root,
-        stop=StopConfig(max_steps=args.max_steps, max_elapsed_s=args.timeout_s),
-        observer=runtime.observer,
-        context_provider=runtime.build_context_provider(),
-        skills=skills,
-        policy=runtime.build_policy(),
-        task_store=runtime.task_store,
-        compression_config=runtime.compression_config,
-        transcripts_dir=runtime.transcripts_dir,
-        summarizer=summarizer,
-    )
-    payload = runtime.finalize(result)
-    if args.output == 'json':
-        print(json.dumps(payload, ensure_ascii=False))
-    else:
-        print(f"done: {result.done}")
-        print(f"stop_reason: {result.stop_reason.value}")
-        print(f"steps: {result.steps}")
-        print(f"final_output: {result.final_output}")
-        print(f"session_id: {payload['session_id']}")
-        print(f"memory_run_dir: {payload['memory_run_dir']}")
-        if 'run_dir' in payload:
-            print(f"run_dir: {payload['run_dir']}")
-    return 0 if result.done else 1
-
-
-def _build_interactive_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog='anvil',
-        description='Run Anvil as an interactive coding runtime.',
-    )
-    parser.add_argument('--workspace', default='.', help='Workspace root available to tools')
-    parser.add_argument('--session-id', default='', help='Resume an existing interactive session id')
-    parser.add_argument('--sessions-dir', default='.anvil/sessions', help='Root directory for persisted sessions')
-    parser.add_argument('--permission-mode', choices=['strict', 'balanced', 'unsafe'], default='balanced')
-    parser.add_argument(
-        '--provider',
-        choices=['mock', 'openai_compatible', 'anthropic', 'gemini'],
-        default='mock',
-    )
-    parser.add_argument('--model', default='mock-model')
-    parser.add_argument('--base-url', default='')
-    parser.add_argument('--wire-api', choices=['chat_completions', 'responses'], default='chat_completions')
-    parser.add_argument('--api-key-env', default='OPENAI_API_KEY')
-    parser.add_argument('--temperature', type=float, default=0.2)
-    parser.add_argument('--provider-timeout-s', type=float, default=60.0)
-    parser.add_argument('--provider-debug', action='store_true')
-    parser.add_argument('--fallback-model', action='append', default=[])
-    parser.add_argument('--max-retries', type=int, default=2)
-    parser.add_argument('--retry-backoff-s', type=float, default=1.0)
-    parser.add_argument('--retry-http-code', action='append', type=int, default=[])
-    parser.add_argument('--provider-header', action='append', default=[])
-    parser.add_argument('--max-steps', type=int, default=12)
-    parser.add_argument('--timeout-s', type=float, default=120.0)
-    parser.add_argument('--history-window', type=int, default=8)
-    parser.add_argument('--memory-dir', default='.anvil/runs')
-    parser.add_argument('--run-id')
-    parser.add_argument('--summarize-every', type=int, default=5)
-    parser.add_argument('--record-run', action='store_true', default=True)
-    parser.add_argument('--no-record-run', action='store_false', dest='record_run')
-    parser.add_argument('--runs-dir', default='.anvil/runs')
-    parser.add_argument('--observer-file')
-    parser.add_argument('--include-history', action='store_true')
-    parser.add_argument('--tasks-dir', default='.tasks')
-    parser.add_argument('--transcripts-dir', default='.transcripts')
-    parser.add_argument('--max-context-tokens', type=int, default=50000)
-    parser.add_argument('--micro-compact-keep', type=int, default=3)
-    parser.add_argument('--recent-transcript-entries', type=int, default=8)
-    parser.add_argument('--output', choices=['text', 'json'], default='text')
-    parser.add_argument(
-        '--skill',
-        action='append',
-        default=[],
-        dest='skills',
-        help='Skills to load into the tool dispatch',
-    )
-    return parser
-
-
-def _should_launch_interactive(argv: List[str]) -> bool:
-    if not argv:
-        return True
-    first = argv[0]
-    if first in {'-h', '--help'}:
-        return False
-    return first not in {'code', 'tools', 'skills', 'replay', 'team', 'doctor'}
-
-
-def _build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
-    def run_turn(user_text: str) -> str:
-        turn_args = copy.deepcopy(base_args)
-        turn_args.session_id = session_id
-        turn_args.goal = user_text
-        turn_args.goal_file = ''
-        runtime = CodeRuntime(turn_args, goal=user_text)
-        skills = _load_skills_from_args(turn_args)
-        decider = _build_coding_decider(turn_args, skills)
-        summarizer = _build_coding_summarizer(turn_args)
-        if runtime.observer is not None:
-            runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
-        result = run_coding_agent(
-            goal=runtime.goal,
-            decider=decider,
-            workspace_root=runtime.workspace_root,
-            stop=StopConfig(max_steps=turn_args.max_steps, max_elapsed_s=turn_args.timeout_s),
-            observer=runtime.observer,
-            context_provider=runtime.build_context_provider(),
-            skills=skills,
-            policy=runtime.build_policy(),
-            task_store=runtime.task_store,
-            compression_config=runtime.compression_config,
-            transcripts_dir=runtime.transcripts_dir,
-            summarizer=summarizer,
-        )
-        payload = runtime.finalize(result)
-        return str(payload.get('final_output', '') or '')
-
-    return run_turn
-
-
-def _run_interactive_command(args: argparse.Namespace) -> int:
-    workspace_root = Path(args.workspace).resolve()
-    sessions_root = Path(args.sessions_dir)
-    if not sessions_root.is_absolute():
-        if str(args.sessions_dir) == '.anvil/sessions':
-            sessions_root = (workspace_root / sessions_root).resolve()
-        else:
-            sessions_root = sessions_root.resolve()
-    if args.session_id:
-        session_store = SessionStore.load(root_dir=sessions_root, session_id=args.session_id)
-    else:
-        session_store = SessionStore.create(
-            root_dir=sessions_root,
-            workspace_root=workspace_root,
-            goal='',
-            memory_run_dir=Path(args.memory_dir) / (args.run_id or _default_run_id()),
-        )
-    runtime = InteractiveRuntime(
-        session_store=session_store,
-        tool_specs=builtin_tool_specs(),
-        run_turn=_build_interactive_turn_runner(args, session_id=session_store.state.session_id),
-        stdin=sys.stdin,
-        stdout=sys.stdout,
-    )
-    return runtime.run()
+    return _coding_runtime.run_code_command(args)
 
 
 def _parse_teammate(value: str) -> Tuple[str, str]:
@@ -831,20 +585,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
-    if hasattr(sys.stderr, 'reconfigure'):
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
-    argv = sys.argv[1:]
-    if _should_launch_interactive(argv):
-        parser = _build_interactive_parser()
-        args = parser.parse_args(argv)
-        code = _run_interactive_command(args)
-        raise SystemExit(code)
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    code = args.handler(args)
-    raise SystemExit(code)
+    from .entrypoints.agent import main as entrypoint_main
+
+    entrypoint_main()
 
 
 if __name__ == '__main__':

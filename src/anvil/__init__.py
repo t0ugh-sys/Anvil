@@ -28,6 +28,9 @@ from . import permissions
 from . import runtime
 from . import session
 from . import tool_spec
+from . import commands
+from . import services
+from . import entrypoints
 
 __all__ = [
     'AnvilAgent',
@@ -66,4 +69,7 @@ __all__ = [
     'runtime',
     'session',
     'tool_spec',
+    'commands',
+    'services',
+    'entrypoints',
 ]

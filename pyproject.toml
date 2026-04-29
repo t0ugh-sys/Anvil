@@ -1,7 +1,7 @@
 [project]
 name = "Anvil"
 version = "0.1.0"
-description = "Tool-use coding agent runtime with a stdlib-only Python core."
+description = "Terminal-first coding agent runtime inspired by Claude Code."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -28,7 +28,7 @@ dev = []
 tui = ["textual>=0.86.2"]
 
 [project.scripts]
-anvil = "anvil.agent_cli:main"
+anvil = "anvil.entrypoints.agent:main"
 anvil-core = "anvil.cli:main"
 anvil-chat = "anvil.ui.tui_chat:main"
 

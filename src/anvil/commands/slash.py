@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .session import SessionStore
-from .tool_spec import ToolSpec
+from ..session import SessionStore
+from ..tool_spec import ToolSpec
 
 
 @dataclass(frozen=True)
