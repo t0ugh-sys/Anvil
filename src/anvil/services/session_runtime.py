@@ -13,6 +13,7 @@ from ..session import SessionStore
 from ..tools import builtin_tool_specs
 from .chat_runtime import InteractiveRuntime
 from .coding_runtime import build_coding_decider, build_coding_summarizer, load_skills_from_args
+from .runtime_config import RuntimeConfigManager
 
 
 def build_interactive_parser() -> argparse.ArgumentParser:
@@ -77,9 +78,10 @@ def should_launch_interactive(argv: List[str]) -> bool:
     return first not in {'code', 'tools', 'skills', 'replay', 'team', 'doctor'}
 
 
-def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
+def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str, runtime_config_manager: RuntimeConfigManager):
     def run_turn(user_text: str) -> str:
         turn_args = copy.deepcopy(base_args)
+        runtime_config_manager.apply_to_args(turn_args)
         turn_args.session_id = session_id
         turn_args.goal = user_text
         turn_args.goal_file = ''
@@ -126,10 +128,16 @@ def run_interactive_command(args: argparse.Namespace, *, default_run_id: str) ->
             goal='',
             memory_run_dir=Path(args.memory_dir) / (args.run_id or default_run_id),
         )
+    runtime_config_manager = RuntimeConfigManager.from_args(session_store=session_store, args=args)
     runtime = InteractiveRuntime(
         session_store=session_store,
         tool_specs=builtin_tool_specs(),
-        run_turn=build_interactive_turn_runner(args, session_id=session_store.state.session_id),
+        run_turn=build_interactive_turn_runner(
+            args,
+            session_id=session_store.state.session_id,
+            runtime_config_manager=runtime_config_manager,
+        ),
+        runtime_config_manager=runtime_config_manager,
         stdin=sys.stdin,
         stdout=sys.stdout,
     )

@@ -17,6 +17,7 @@ class InteractiveRuntime:
     session_store: SessionStore
     tool_specs: Iterable[ToolSpec]
     run_turn: TurnRunner
+    runtime_config_manager: object | None
     stdin: TextIO
     stdout: TextIO
 
@@ -25,7 +26,7 @@ class InteractiveRuntime:
             f'Anvil interactive session {self.session_store.state.session_id} '
             f'({self.session_store.state.workspace_root})'
         )
-        self._write_line('Type /help for commands.')
+        self._write_line('Type /help for commands. Use /provider and /model to switch models during the session.')
         while True:
             self._write('anvil> ')
             line = self.stdin.readline()
@@ -41,6 +42,7 @@ class InteractiveRuntime:
                     command,
                     session_store=self.session_store,
                     tool_specs=self.tool_specs,
+                    runtime_config_manager=self.runtime_config_manager,
                 )
                 self.session_store.append_event('chat_command', {'command': command.name, 'argument': command.argument})
                 self._write_line(result.output)

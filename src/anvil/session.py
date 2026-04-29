@@ -24,6 +24,7 @@ class SessionState:
     tool_history: list[dict[str, object]] = field(default_factory=list)
     todo_state: dict[str, object] = field(default_factory=dict)
     permission_cache: dict[str, str] = field(default_factory=dict)
+    runtime_config: dict[str, object] = field(default_factory=dict)
     memory_run_dir: str = ''
     artifacts_dir: str = ''
     last_summary: str = ''
@@ -41,6 +42,7 @@ class SessionState:
             'tool_history': list(self.tool_history),
             'todo_state': dict(self.todo_state),
             'permission_cache': dict(self.permission_cache),
+            'runtime_config': dict(self.runtime_config),
             'memory_run_dir': self.memory_run_dir,
             'artifacts_dir': self.artifacts_dir,
             'last_summary': self.last_summary,
@@ -64,6 +66,7 @@ class SessionState:
                 str(key): str(value)
                 for key, value in dict(payload.get('permission_cache', {})).items()
             } if isinstance(payload.get('permission_cache', {}), dict) else {},
+            runtime_config=dict(payload.get('runtime_config', {})) if isinstance(payload.get('runtime_config', {}), dict) else {},
             memory_run_dir=str(payload.get('memory_run_dir', '')),
             artifacts_dir=str(payload.get('artifacts_dir', '')),
             last_summary=str(payload.get('last_summary', '')),
@@ -124,6 +127,11 @@ class SessionStore:
 
     def record_permission_cache(self, cache: Dict[str, str]) -> None:
         self.state.permission_cache = dict(cache)
+        self.state.updated_at = utc_now_iso()
+        self._write_session()
+
+    def update_runtime_config(self, config: Dict[str, object]) -> None:
+        self.state.runtime_config = dict(config)
         self.state.updated_at = utc_now_iso()
         self._write_session()
 

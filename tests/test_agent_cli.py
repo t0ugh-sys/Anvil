@@ -13,6 +13,7 @@ import _bootstrap  # noqa: F401
 from anvil.agent_cli import _build_coding_decider, _run_code_command, _should_launch_interactive, build_parser
 from anvil.commands import execute_slash_command, parse_slash_command
 from anvil.session import SessionStore
+from anvil.services.runtime_config import RuntimeConfigManager
 from anvil.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
 
@@ -58,6 +59,7 @@ class AgentCliTests(unittest.TestCase):
     def test_should_parse_help_and_resume_slash_commands(self) -> None:
         self.assertEqual(parse_slash_command('/help').name, 'help')
         self.assertEqual(parse_slash_command('/resume now').argument, 'now')
+        self.assertEqual(parse_slash_command('/provider anthropic').argument, 'anthropic')
         self.assertIsNone(parse_slash_command('plain text'))
 
     def test_should_describe_tool_use_loop_in_code_help(self) -> None:
@@ -100,15 +102,31 @@ class AgentCliTests(unittest.TestCase):
                 goal='inspect runtime',
                 memory_run_dir=tmp_dir / 'memory',
             )
+            class Args:
+                provider = 'mock'
+                model = 'mock-model'
+                base_url = ''
+                wire_api = 'chat_completions'
+            runtime_config_manager = RuntimeConfigManager.from_args(session_store=session_store, args=Args())
             session_store.append_event('chat_user', {'role': 'user', 'content': 'hello'})
             result = execute_slash_command(
                 parse_slash_command('/resume'),
                 session_store=session_store,
                 tool_specs=builtin_tool_specs(),
+                runtime_config_manager=runtime_config_manager,
             )
             self.assertIn('session_id:', result.output)
             self.assertIn('inspect runtime', result.output)
             self.assertIn('user: hello', result.output)
+            self.assertIn('provider: mock', result.output)
+            change_result = execute_slash_command(
+                parse_slash_command('/provider anthropic'),
+                session_store=session_store,
+                tool_specs=builtin_tool_specs(),
+                runtime_config_manager=runtime_config_manager,
+            )
+            self.assertIn('provider: anthropic', change_result.output)
+            self.assertEqual(session_store.state.runtime_config.get('provider'), 'anthropic')
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

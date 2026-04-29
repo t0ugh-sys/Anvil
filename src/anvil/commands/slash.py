@@ -34,17 +34,52 @@ def execute_slash_command(
     *,
     session_store: SessionStore,
     tool_specs: Iterable[ToolSpec],
+    runtime_config_manager=None,
 ) -> CommandResult:
     if command.name == 'help':
         return CommandResult(
             output=(
                 'Commands:\n'
                 '/help   Show this help\n'
+                '/config Show current runtime config\n'
+                '/provider <name> Set provider for the current session\n'
+                '/model <name> Set model for the current session\n'
+                '/wire-api <name> Set wire API for the current session\n'
+                '/base-url <url> Set base URL for the current session\n'
                 '/tools  List available tools\n'
                 '/resume Show the current session summary\n'
                 '/exit   Exit the interactive runtime'
             )
         )
+    if command.name == 'config':
+        if runtime_config_manager is None:
+            return CommandResult(output='runtime config unavailable')
+        return CommandResult(output=runtime_config_manager.summary())
+    if command.name == 'provider':
+        if runtime_config_manager is None:
+            return CommandResult(output='runtime config unavailable')
+        try:
+            return CommandResult(output=runtime_config_manager.set_provider(command.argument))
+        except ValueError as error:
+            return CommandResult(output=str(error))
+    if command.name == 'model':
+        if runtime_config_manager is None:
+            return CommandResult(output='runtime config unavailable')
+        try:
+            return CommandResult(output=runtime_config_manager.set_model(command.argument))
+        except ValueError as error:
+            return CommandResult(output=str(error))
+    if command.name == 'wire-api':
+        if runtime_config_manager is None:
+            return CommandResult(output='runtime config unavailable')
+        try:
+            return CommandResult(output=runtime_config_manager.set_wire_api(command.argument))
+        except ValueError as error:
+            return CommandResult(output=str(error))
+    if command.name == 'base-url':
+        if runtime_config_manager is None:
+            return CommandResult(output='runtime config unavailable')
+        return CommandResult(output=runtime_config_manager.set_base_url(command.argument))
     if command.name == 'tools':
         names = [spec.name for spec in sorted(tool_specs, key=lambda item: item.name)]
         return CommandResult(output='\n'.join(names) if names else 'No tools registered.')
@@ -52,6 +87,7 @@ def execute_slash_command(
         state = session_store.state
         history = '\n'.join(state.history_tail[-5:]) if state.history_tail else '(empty)'
         summary = state.last_summary or '(empty)'
+        config_text = runtime_config_manager.summary() if runtime_config_manager is not None else 'runtime config unavailable'
         return CommandResult(
             output=(
                 f'session_id: {state.session_id}\n'
@@ -59,6 +95,7 @@ def execute_slash_command(
                 f'goal: {state.goal or "(empty)"}\n'
                 f'status: {state.status}\n'
                 f'last_summary: {summary}\n'
+                f'{config_text}\n'
                 f'history_tail:\n{history}'
             )
         )
