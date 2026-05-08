@@ -31,6 +31,7 @@ from . import tool_spec
 from . import commands
 from . import services
 from . import entrypoints
+from . import team_runtime
 
 __all__ = [
     'AnvilAgent',
@@ -72,4 +73,5 @@ __all__ = [
     'commands',
     'services',
     'entrypoints',
+    'team_runtime',
 ]

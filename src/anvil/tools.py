@@ -689,6 +689,9 @@ def builtin_tool_registrations() -> List[ToolRegistration]:
 
 def build_default_tools() -> ToolDispatchMap:
     return _build_tool_dispatch_map(builtin_tool_registrations())
+
+
+
 def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: ToolDispatchMap) -> ToolResult:
     tool = tools.get(tool_call.name)
     if tool is None:

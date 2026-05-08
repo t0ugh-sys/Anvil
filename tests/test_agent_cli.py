@@ -545,6 +545,264 @@ class AgentCliTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_should_parse_team_run_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'team',
+                'run',
+                '--workspace',
+                '.',
+                '--teammate',
+                'alice:coder',
+                '--message',
+                'alice=fix bug',
+                '--provider',
+                'mock',
+                '--model',
+                'mock-v3',
+                '--output',
+                'json',
+            ]
+        )
+        self.assertEqual(args.command, 'team')
+        self.assertEqual(args.team_command, 'run')
+        self.assertEqual(args.teammate, ['alice:coder'])
+        self.assertEqual(args.message, ['alice=fix bug'])
+
+    def test_should_parse_team_send_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            ['team', 'send', '--workspace', '.', '--to', 'alice', '--message', 'fix bug']
+        )
+        self.assertEqual(args.command, 'team')
+        self.assertEqual(args.team_command, 'send')
+        self.assertEqual(args.to, 'alice')
+
+    def test_should_parse_team_serve_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'team',
+                'serve',
+                '--workspace',
+                '.',
+                '--teammate',
+                'alice:coder',
+                '--service-timeout-s',
+                '10',
+            ]
+        )
+        self.assertEqual(args.command, 'team')
+        self.assertEqual(args.team_command, 'serve')
+        self.assertEqual(args.service_timeout_s, 10.0)
+
+    def test_should_parse_team_add_task_subcommand(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                'team',
+                'add-task',
+                '--workspace',
+                '.',
+                '--goal',
+                'inspect README',
+                '--depends-on',
+                'task_1',
+            ]
+        )
+        self.assertEqual(args.command, 'team')
+        self.assertEqual(args.team_command, 'add-task')
+        self.assertEqual(args.depends_on, ['task_1'])
+
+    def test_should_run_team_runtime_with_mock_provider(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'team-cli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            args = parser.parse_args(
+                [
+                    'team',
+                    'run',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--teammate',
+                    'alice:coder',
+                    '--message',
+                    'alice=inspect README',
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--output',
+                    'json',
+                    '--service-timeout-s',
+                    '2',
+                ]
+            )
+            with patch('sys.stdout'):
+                exit_code = args.handler(args)
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((tmp_dir / '.team' / 'config.json').exists())
+            self.assertTrue((tmp_dir / '.team' / 'inbox' / 'alice.jsonl').exists())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_run_team_tasks_with_mock_provider(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'team-cli-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            args = parser.parse_args(
+                [
+                    'team',
+                    'run',
+                    '--workspace',
+                    str(tmp_dir),
+                    '--teammate',
+                    'alice:coder',
+                    '--task',
+                    'inspect README',
+                    '--task',
+                    'patch README',
+                    '--provider',
+                    'mock',
+                    '--model',
+                    'mock-v3',
+                    '--output',
+                    'json',
+                    '--service-timeout-s',
+                    '2',
+                ]
+            )
+            with patch('sys.stdout') as stdout:
+                exit_code = args.handler(args)
+            self.assertEqual(exit_code, 0)
+            tasks_dir = tmp_dir / '.team' / 'tasks'
+            self.assertTrue((tasks_dir / 'task_task_1.json').exists())
+            self.assertTrue((tasks_dir / 'task_task_2.json').exists())
+            first_task = json.loads((tasks_dir / 'task_task_1.json').read_text(encoding='utf-8'))
+            second_task = json.loads((tasks_dir / 'task_task_2.json').read_text(encoding='utf-8'))
+            self.assertEqual(first_task['status'], 'completed')
+            self.assertEqual(second_task['status'], 'completed')
+            output_text = ''.join(call.args[0] for call in stdout.write.call_args_list if call.args)
+            payload = json.loads(output_text)
+            self.assertEqual(len(payload['tasks']), 2)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_serve_team_and_process_external_message(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'team-service-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        service_args = parser.parse_args(
+            [
+                'team',
+                'serve',
+                '--workspace',
+                str(tmp_dir),
+                '--teammate',
+                'alice:coder',
+                '--provider',
+                'mock',
+                '--model',
+                'mock-v3',
+                '--output',
+                'json',
+                '--service-timeout-s',
+                '2',
+            ]
+        )
+        send_args = parser.parse_args(
+            [
+                'team',
+                'send',
+                '--workspace',
+                str(tmp_dir),
+                '--to',
+                'alice',
+                '--message',
+                'inspect README',
+            ]
+        )
+        outputs: list[str] = []
+
+        def run_service() -> None:
+            with patch('builtins.print', side_effect=lambda *parts, **_: outputs.append(' '.join(str(part) for part in parts))):
+                service_args.handler(service_args)
+
+        worker = threading.Thread(target=run_service, daemon=True)
+        worker.start()
+        try:
+            time.sleep(0.2)
+            send_args.handler(send_args)
+            worker.join(timeout=5.0)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(outputs)
+            payload = json.loads(outputs[-1])
+            self.assertEqual(payload['mode'], 'service')
+            self.assertTrue(any(reply['sender'] == 'alice' for reply in payload['replies']))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_serve_team_and_pick_up_added_task(self) -> None:
+        parser = build_parser()
+        tmp_dir = Path('tests/.tmp') / f'team-service-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        service_args = parser.parse_args(
+            [
+                'team',
+                'serve',
+                '--workspace',
+                str(tmp_dir),
+                '--teammate',
+                'alice:coder',
+                '--provider',
+                'mock',
+                '--model',
+                'mock-v3',
+                '--output',
+                'json',
+                '--service-timeout-s',
+                '2',
+            ]
+        )
+        add_task_args = parser.parse_args(
+            [
+                'team',
+                'add-task',
+                '--workspace',
+                str(tmp_dir),
+                '--goal',
+                'inspect README',
+                '--output',
+                'json',
+            ]
+        )
+        outputs: list[str] = []
+
+        def run_service() -> None:
+            with patch('builtins.print', side_effect=lambda *parts, **_: outputs.append(' '.join(str(part) for part in parts))):
+                service_args.handler(service_args)
+
+        worker = threading.Thread(target=run_service, daemon=True)
+        worker.start()
+        try:
+            time.sleep(0.2)
+            with patch('builtins.print'):
+                add_task_args.handler(add_task_args)
+            worker.join(timeout=5.0)
+            self.assertFalse(worker.is_alive())
+            payload = json.loads(outputs[-1])
+            self.assertTrue(payload['tasks'])
+            self.assertEqual(payload['tasks'][0]['status'], 'completed')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 if __name__ == '__main__':
     unittest.main()
