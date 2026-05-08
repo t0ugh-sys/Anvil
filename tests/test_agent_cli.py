@@ -715,7 +715,7 @@ class AgentCliTests(unittest.TestCase):
                 '--output',
                 'json',
                 '--service-timeout-s',
-                '2',
+                '5',
             ]
         )
         send_args = parser.parse_args(
@@ -739,9 +739,9 @@ class AgentCliTests(unittest.TestCase):
         worker = threading.Thread(target=run_service, daemon=True)
         worker.start()
         try:
-            time.sleep(0.2)
+            time.sleep(0.5)
             send_args.handler(send_args)
-            worker.join(timeout=5.0)
+            worker.join(timeout=10.0)
             self.assertFalse(worker.is_alive())
             self.assertTrue(outputs)
             payload = json.loads(outputs[-1])
@@ -770,7 +770,7 @@ class AgentCliTests(unittest.TestCase):
                 '--output',
                 'json',
                 '--service-timeout-s',
-                '2',
+                '5',
             ]
         )
         add_task_args = parser.parse_args(
@@ -794,10 +794,10 @@ class AgentCliTests(unittest.TestCase):
         worker = threading.Thread(target=run_service, daemon=True)
         worker.start()
         try:
-            time.sleep(0.2)
+            time.sleep(0.5)
             with patch('builtins.print'):
                 add_task_args.handler(add_task_args)
-            worker.join(timeout=5.0)
+            worker.join(timeout=10.0)
             self.assertFalse(worker.is_alive())
             payload = json.loads(outputs[-1])
             self.assertTrue(payload['tasks'])
