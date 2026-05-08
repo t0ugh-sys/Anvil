@@ -228,6 +228,26 @@ def search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
         return ToolResult(id=call_id, ok=False, output='', error='pattern is required')
 
     try:
+        import subprocess
+        # Try grep first (fast), fallback to Python search
+        try:
+            result = subprocess.run(
+                ['grep', '-rl', '--include=*.py', '--include=*.md', '--include=*.txt',
+                 '--include=*.json', '--include=*.yaml', '--include=*.yml',
+                 '--include=*.toml', '--include=*.js', '--include=*.ts',
+                 pattern, '.'],
+                cwd=str(context.workspace_root),
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                files = sorted(result.stdout.strip().split('\n'))
+                # Strip ./ prefix from grep output
+                files = [f[2:] if f.startswith('./') else f for f in files]
+                return ToolResult(id=call_id, ok=True, output='\n'.join(files))
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Fallback: Python-based search
         results: List[str] = []
         for path in _iter_searchable_files(context.workspace_root):
             try:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from ..agent_protocol import render_agent_step_schema
@@ -12,12 +11,7 @@ from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
 from ..runtime import CodeRuntime
 from ..skills import SkillLoader, list_skills
-
-
-def resolve_goal(args: argparse.Namespace) -> str:
-    if args.goal_file:
-        return Path(args.goal_file).read_text(encoding='utf-8-sig').strip()
-    return str(getattr(args, 'goal', '') or '').strip()
+from ..utils import resolve_goal
 
 
 def build_coding_prompt(
@@ -134,7 +128,7 @@ def load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
 
 
 def run_code_command(args: argparse.Namespace) -> int:
-    goal = resolve_goal(args)
+    goal = resolve_goal(getattr(args, 'goal', None), getattr(args, 'goal_file', None))
     runtime = CodeRuntime(args, goal=goal)
     if not runtime.goal.strip():
         raise ValueError('goal is required unless resuming from a session with a stored goal')

@@ -13,28 +13,7 @@ from .policies import Capability, ToolPolicy
 from .run_recorder import RunRecorder
 from .session import SessionStore
 from .task_store import TaskStore
-
-
-def build_jsonl_observer(path: str) -> ObserverFn:
-    def observer(event: str, payload: Dict[str, Any]) -> None:
-        record = {'event': event, 'payload': payload}
-        with open(path, 'a', encoding='utf-8') as file:
-            file.write(json.dumps(record, ensure_ascii=False))
-            file.write('\n')
-
-    return observer
-
-
-def merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn]:
-    active = [item for item in observers if item is not None]
-    if not active:
-        return None
-
-    def merged(event: str, payload: Dict[str, Any]) -> None:
-        for observer in active:
-            observer(event, payload)
-
-    return merged
+from .utils import build_jsonl_observer, default_run_id, merge_observers
 
 
 class CodeRuntime:
@@ -49,7 +28,7 @@ class CodeRuntime:
             recent_transcript_entries=args.recent_transcript_entries,
         )
         self.transcripts_dir = (self.workspace_root / args.transcripts_dir).resolve() if args.transcripts_dir else None
-        self.run_id = args.run_id or self._default_run_id()
+        self.run_id = args.run_id or default_run_id()
         self.permission_manager = PermissionManager(
             mode_name=str(getattr(args, 'permission_mode', 'balanced')),
         )
@@ -83,10 +62,6 @@ class CodeRuntime:
         self.recorder: Optional[RunRecorder] = None
         self.memory_store = JsonlMemoryStore(memory_dir=self.memory_run_dir, summarize_every=args.summarize_every)
         self.observer = self._build_observer()
-
-    def _default_run_id(self) -> str:
-        from datetime import datetime, timezone
-        return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 
     def _build_observer(self) -> Optional[ObserverFn]:
         observers: List[ObserverFn] = []

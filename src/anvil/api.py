@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from anvil.core.agent import AnvilAgent
-from anvil.core.types import StopConfig
-from anvil.llm.providers import build_invoke_from_args
-from anvil.steps.json_loop import JsonLoopState, make_json_decision_step
+from .core.agent import AnvilAgent
+from .core.types import StopConfig
+from .llm.providers import build_invoke_from_args
+from .steps.json_loop import JsonLoopState, make_json_decision_step
 
 from .errors import (
     validate_goal,
@@ -160,7 +160,7 @@ class AnvilAPI:
     
     def run_coding(self, goal: str) -> AgentResult:
         """Run the coding agent with a goal."""
-        from anvil.coding_agent import run_coding_agent, build_coding_step
+        from .coding_agent import run_coding_agent, build_coding_step
         
         goal = validate_goal(goal)
         

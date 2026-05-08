@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 
 # ============== Compression Types ==============
@@ -360,6 +360,8 @@ def _generate_archive_summary(groups: List[MessageGroup]) -> str:
                         tool_count += 1
         
         lines.append(f'- Round {group.round_id}: {tool_count} tool calls, {group.token_count} tokens')
+
+    return '\n'.join(lines)
 
 
 def micro_compact_entries(

@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from anvil.agent_protocol import ToolResult
+from .agent_protocol import ToolResult
 
 
 # Skill definition
@@ -188,7 +188,7 @@ class WebSearchSkill(Skill):
     description = "Search the web and fetch URLs"
     
     def get_tools(self) -> dict[str, Callable]:
-        from anvil.tools import web_search_tool, fetch_url_tool
+        from .tools import web_search_tool, fetch_url_tool
         return {
             'web_search': web_search_tool,
             'fetch_url': fetch_url_tool,
@@ -201,7 +201,7 @@ class MemorySkill(Skill):
     description = "Analyze past runs and learn patterns"
     
     def get_tools(self) -> dict[str, Callable]:
-        from anvil.tools import analyze_memory_tool
+        from .tools import analyze_memory_tool
         return {
             'analyze_memory': analyze_memory_tool,
         }
@@ -213,7 +213,7 @@ class FileSkill(Skill):
     description = "Read, write, and search files"
     
     def get_tools(self) -> dict[str, Callable]:
-        from anvil.tools import read_file_tool, write_file_tool, apply_patch_tool, search_tool
+        from .tools import read_file_tool, write_file_tool, apply_patch_tool, search_tool
         return {
             'read_file': read_file_tool,
             'write_file': write_file_tool,
@@ -228,7 +228,7 @@ class CommandSkill(Skill):
     description = "Run shell commands"
     
     def get_tools(self) -> dict[str, Callable]:
-        from anvil.tools import run_command_tool
+        from .tools import run_command_tool
         return {
             'run_command': run_command_tool,
         }
@@ -249,7 +249,7 @@ class BrowserSkill(Skill):
             return build_browser_tools()
         except ImportError:
             # Return a error tool if playwright not installed
-            def browser_not_available(args):
+            def browser_not_available(context, args):
                 return ToolResult(
                     id=str(args.get('id', 'browser')),
                     ok=False,

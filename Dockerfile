@@ -3,12 +3,12 @@
 # Build: docker build -t anvil .
 # Run:   docker run -it --rm anvil --goal "your goal"
 #
-# Supports Python 3.10+
+# Supports Python 3.11+
 
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 LABEL maintainer="Anvil"
-LABEL description="Enterprise-grade loop agent skeleton"
+LABEL description="Terminal-first coding agent runtime"
 
 # Install Node.js for npm wrapper
 RUN apt-get update && apt-get install -y \
@@ -19,13 +19,14 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy Python source
+# Copy Python source and dependencies
 COPY src/ ./src/
 COPY pyproject.toml README.md LICENSE ./
 COPY requirements.txt ./
+COPY skills/ ./skills/
 
-# Install Python package
-RUN pip install --no-cache-dir -e .
+# Install Python package (non-editable for production)
+RUN pip install --no-cache-dir .
 
 # Copy npm wrapper
 COPY bin/ ./bin/
@@ -34,5 +35,5 @@ COPY bin/ ./bin/
 RUN chmod +x bin/anvil.js
 
 # Default command
-ENTRYPOINT ["python", "-m", "anvil.agent_cli"]
+ENTRYPOINT ["python", "-m", "anvil.entrypoints.agent"]
 CMD ["--help"]
