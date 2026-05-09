@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .entrypoints.parser_builders import (
@@ -27,10 +26,7 @@ from .services.team_service import (
 )
 from .ops.doctor import format_doctor_report, run_provider_doctor
 from .tools import builtin_tool_specs
-
-
-def _default_run_id() -> str:
-    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+from .utils import default_run_id
 
 
 def _build_coding_prompt(

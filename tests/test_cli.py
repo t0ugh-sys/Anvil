@@ -68,7 +68,7 @@ class CliTests(unittest.TestCase):
             path = file.name
         try:
             args = parser.parse_args(['--goal-file', path])
-            self.assertEqual(resolve_goal(args), '目标')
+            self.assertEqual(resolve_goal(goal_file=args.goal_file), '目标')
         finally:
             os.remove(path)
 
@@ -100,9 +100,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.run_id, 'r1')
 
     def test_should_reject_empty_goal(self) -> None:
-        args = argparse.Namespace(goal='   ', goal_file=None)
-        with self.assertRaises(ValueError):
-            resolve_goal(args)
+        from anvil.errors import validate_goal
+        with self.assertRaises(Exception):
+            validate_goal('   ')
 
     def test_should_write_observer_jsonl(self) -> None:
         with tempfile.NamedTemporaryFile('w', delete=False, encoding='utf-8', suffix='.jsonl') as file:

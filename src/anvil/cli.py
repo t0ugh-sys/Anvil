@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,10 +12,7 @@ from .core.types import ContextSnapshot, ObserverFn, RunResult, StopConfig, Stop
 from .memory.jsonl_store import JsonlMemoryStore
 from .run_recorder import RunRecorder
 from .steps.registry import StepRegistry, build_default_registry
-
-
-def _default_run_id() -> str:
-    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+from .utils import build_jsonl_observer, default_run_id, merge_observers, resolve_goal
 
 
 def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
@@ -59,48 +55,17 @@ def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_goal(args: argparse.Namespace) -> str:
-    if args.goal_file:
-        with open(args.goal_file, 'r', encoding='utf-8-sig') as file:
-            goal = file.read().strip()
-    else:
-        goal = args.goal
-    if not goal.strip():
-        raise ValueError('goal must not be empty')
-    return goal
-
-
 def should_exit_failure(result: RunResult[Any]) -> bool:
     failure_reasons = {StopReason.timeout, StopReason.max_steps, StopReason.step_error}
     return (not result.done) and (result.stop_reason in failure_reasons)
 
 
-def build_jsonl_observer(path: str) -> ObserverFn:
-    def observer(event: str, payload: Dict[str, Any]) -> None:
-        record = {'event': event, 'payload': payload}
-        with open(path, 'a', encoding='utf-8') as file:
-            file.write(json.dumps(record, ensure_ascii=False))
-            file.write('\n')
-
-    return observer
-
-
-def merge_observers(observers: List[ObserverFn]) -> Optional[ObserverFn]:
-    active = [item for item in observers if item is not None]
-    if not active:
-        return None
-
-    def merged(event: str, payload: Dict[str, Any]) -> None:
-        for observer in active:
-            observer(event, payload)
-
-    return merged
-
-
 def execute(args: argparse.Namespace, registry: StepRegistry) -> Tuple[str, int]:
-    goal = resolve_goal(args)
+    goal = resolve_goal(args.goal, args.goal_file)
+    if not goal.strip():
+        raise ValueError('goal must not be empty')
     step, initial_state = registry.create(args.strategy, args)
-    run_id = args.run_id or _default_run_id()
+    run_id = args.run_id or default_run_id()
     memory_run_dir = Path(args.memory_dir) / run_id
     memory_store = JsonlMemoryStore(memory_dir=memory_run_dir, summarize_every=args.summarize_every)
     memory_store.on_event('run_started', {'goal': goal, 'strategy': args.strategy, 'facts': []})
@@ -129,19 +94,13 @@ def execute(args: argparse.Namespace, registry: StepRegistry) -> Tuple[str, int]
 
     memory_context = memory_store.load_context(goal=goal, last_k_steps=args.history_window)
     if args.output == 'json':
-        if recorder is None:
-            payload = run_result_to_dict(result, include_history=args.include_history)
-            payload['memory_state'] = memory_context.state_summary
-            payload['memory_last_steps'] = list(memory_context.last_steps)
-            payload['memory_run_dir'] = str(memory_run_dir)
-            rendered = json.dumps(payload, ensure_ascii=False)
-        else:
-            payload = run_result_to_dict(result, include_history=args.include_history)
+        payload = run_result_to_dict(result, include_history=args.include_history)
+        payload['memory_state'] = memory_context.state_summary
+        payload['memory_last_steps'] = list(memory_context.last_steps)
+        payload['memory_run_dir'] = str(memory_run_dir)
+        if recorder is not None:
             payload['run_dir'] = str(recorder.run_dir)
-            payload['memory_state'] = memory_context.state_summary
-            payload['memory_last_steps'] = list(memory_context.last_steps)
-            payload['memory_run_dir'] = str(memory_run_dir)
-            rendered = json.dumps(payload, ensure_ascii=False)
+        rendered = json.dumps(payload, ensure_ascii=False)
     else:
         lines = [
             f'done: {result.done}',
@@ -153,11 +112,7 @@ def execute(args: argparse.Namespace, registry: StepRegistry) -> Tuple[str, int]
         ]
         if recorder is not None:
             lines.append(f'run_dir: {recorder.run_dir}')
-        rendered = '\n'.join(
-            [
-                *lines,
-            ]
-        )
+        rendered = '\n'.join(lines)
 
     exit_code = 1 if (args.exit_on_failure and should_exit_failure(result)) else 0
     return rendered, exit_code

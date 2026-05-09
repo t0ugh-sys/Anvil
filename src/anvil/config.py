@@ -125,22 +125,3 @@ def merge_config(args_config: Dict[str, Any], config_file: Dict[str, Any]) -> Di
     merged = config_file.copy()
     merged.update(args_config)
     return merged
-
-
-# Config schema for documentation
-CONFIG_SCHEMA = {
-    'provider': 'LLM provider (mock, openai_compatible, anthropic, gemini)',
-    'model': 'Model name',
-    'base_url': 'API base URL for openai_compatible provider',
-    'api_key_env': 'Environment variable name for API key',
-    'temperature': 'LLM temperature (0.0-2.0)',
-    'max_steps': 'Maximum steps for agent loop',
-    'timeout_s': 'Timeout in seconds',
-    'strategy': 'Agent strategy (demo, json_stub, json_llm)',
-    'history_window': 'Number of historical steps to include',
-    'memory_dir': 'Directory for memory storage',
-    'skills': 'Comma-separated list of skills to load',
-    'provider_timeout_s': 'Provider API timeout',
-    'max_retries': 'Maximum retries for API calls',
-    'retry_backoff_s': 'Backoff time for retries',
-}

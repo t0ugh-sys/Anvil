@@ -321,3 +321,4 @@ npm pack --dry-run
 - The core engine returns `stop_reason=step_error` instead of crashing the process when a step raises.
 - `requirements.txt` is only used as an examples/extension placeholder.
 - `npm i -g @t0ugh-sys/anvil` works only after the package has been published to npm.
+# trigger CI
