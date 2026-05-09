@@ -60,10 +60,9 @@ class ApiTests(unittest.TestCase):
             elapsed_s=0.1,
         )
 
-        with patch('anvil.api.build_invoke_from_args', return_value=fake_invoke) as build, patch('anvil.coding_agent.build_coding_step') as build_coding_step, patch('anvil.coding_agent.run_coding_agent', return_value=fake_result) as run_coding_agent:
+        with patch('anvil.api.build_invoke_from_args', return_value=fake_invoke) as build, patch('anvil.coding_agent.run_coding_agent', return_value=fake_result) as run_coding_agent:
             result = api.run_coding('inspect repo')
 
         self.assertTrue(result.success)
         self.assertEqual(build.call_args.kwargs['mode'], 'coding')
-        self.assertIs(build_coding_step.call_args.args[0], fake_invoke)
         self.assertIs(run_coding_agent.call_args.kwargs['decider'], fake_invoke)

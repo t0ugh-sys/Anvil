@@ -12,6 +12,11 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+# Compression thresholds (fraction of max_context_tokens)
+PARTIAL_COMPACT_THRESHOLD = 0.8
+FULL_COMPACT_THRESHOLD = 0.95
+MESSAGE_OVERHEAD_TOKENS = 10
+
 
 # ============== Compression Types ==============
 
@@ -166,7 +171,7 @@ def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
                     total += estimate_tokens([str(block.get('text', ''))])
     
     # 加上工具开销（估计）
-    total += len(messages) * 10
+    total += len(messages) * MESSAGE_OVERHEAD_TOKENS
     return total
 
 
@@ -580,11 +585,11 @@ class CompactManager:
         groups = group_messages_by_rounds(messages)
         
         # 80% - Micro 压缩
-        if tokens < self.config.max_context_tokens * 0.8:
+        if tokens < self.config.max_context_tokens * PARTIAL_COMPACT_THRESHOLD:
             return CompactStrategy.MICRO
-        
+
         # 80-95% - Partial 压缩
-        if tokens < self.config.max_context_tokens * 0.95:
+        if tokens < self.config.max_context_tokens * FULL_COMPACT_THRESHOLD:
             return CompactStrategy.PARTIAL
         
         # 95%+ 或无 LLM - Full 压缩（需要 LLM）
@@ -614,17 +619,15 @@ class CompactManager:
         """执行完全压缩（需要 LLM）"""
         if not self.summary_provider:
             return self._execute_partial(messages)
-        
-        # 调用 LLM 生成摘要
+
         system_prompt, compact_messages = prepare_compact_prompt(
             messages,
             config=self.config,
         )
-        
-        # 注意: 这里需要实际调用 LLM
-        # 简化实现
-        summary = self._state.summary or '[Summary needed]'
-        
+
+        summary = self.summary_provider(system_prompt, compact_messages)
+        self._state.summary = summary
+
         return partial_compact_messages(
             messages,
             max_rounds=self.config.partial_max_rounds,

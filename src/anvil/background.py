@@ -90,11 +90,12 @@ class BackgroundCommandRunner:
         self._notifications.put(result)
 
     def drain_notifications(self) -> Tuple[ToolResult, ...]:
+        import queue
         results: List[ToolResult] = []
         while True:
             try:
                 result = self._notifications.get_nowait()
-            except Exception:
+            except queue.Empty:
                 break
             results.append(result)
         return tuple(results)

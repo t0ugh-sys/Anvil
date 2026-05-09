@@ -86,8 +86,7 @@ class AnvilAPI:
     
     def __init__(self, config: AgentConfig | None = None):
         self.config = config or AgentConfig()
-        # Using Any for flexibility - actual decider has 5 parameters
-        self._invoke_fn: Any = None
+        self._invoke_fn: Callable[..., str] | None = None
     
     def set_provider(self, invoke_fn: Callable[..., str]) -> "AnvilAPI":
         """Set custom LLM provider function."""
@@ -160,18 +159,13 @@ class AnvilAPI:
     
     def run_coding(self, goal: str) -> AgentResult:
         """Run the coding agent with a goal."""
-        from .coding_agent import run_coding_agent, build_coding_step
-        
+        from .coding_agent import run_coding_agent
+
         goal = validate_goal(goal)
-        
+
         try:
             invoke = self._build_provider_invoke(mode="coding")
-            
-            build_coding_step(
-                invoke,
-                workspace_root=self.config.workspace,
-            )
-            
+
             stop = StopConfig(
                 max_steps=self.config.max_steps,
                 max_elapsed_s=self.config.timeout_s,
