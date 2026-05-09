@@ -2,12 +2,15 @@
 Error handling and validation utilities for Anvil
 
 Provides consistent error handling and input validation across the project.
+Implements a structured error hierarchy inspired by Claude Code's error system.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+
+# ============== Error Hierarchy ==============
 
 class AnvilError(Exception):
     """Base exception for Anvil."""
@@ -22,6 +25,90 @@ class AnvilError(Exception):
 class ValidationError(AnvilError):
     """Input validation errors."""
     code = "VALIDATION_ERROR"
+
+
+class AbortError(AnvilError):
+    """Operation was cancelled or aborted."""
+    code = "ABORT_ERROR"
+
+
+class ShellError(AnvilError):
+    """Shell command execution errors with stdout/stderr/exit code."""
+    code = "SHELL_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: str = '',
+        stderr: str = '',
+        exit_code: int | None = None,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(message, details)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exit_code = exit_code
+
+
+class ToolValidationError(AnvilError):
+    """Tool input validation errors with structured field info."""
+    code = "TOOL_VALIDATION_ERROR"
+
+    def __init__(
+        self,
+        tool_name: str,
+        *,
+        missing: tuple[str, ...] = (),
+        unexpected: tuple[str, ...] = (),
+        type_mismatches: tuple[str, ...] = (),
+        details: dict[str, Any] | None = None,
+    ):
+        self.tool_name = tool_name
+        self.missing = missing
+        self.unexpected = unexpected
+        self.type_mismatches = type_mismatches
+        issues = []
+        if missing:
+            issues.extend(f'Missing required parameter: `{p}`' for p in missing)
+        if unexpected:
+            issues.extend(f'Unexpected parameter: `{p}`' for p in unexpected)
+        if type_mismatches:
+            issues.extend(type_mismatches)
+        message = f'{tool_name} validation failed:\n' + '\n'.join(f'  - {i}' for i in issues)
+        super().__init__(message, details)
+
+
+# ============== Error Classification ==============
+
+def is_abort_error(error: Exception) -> bool:
+    """Check if an error is an abort/cancellation signal."""
+    if isinstance(error, AbortError):
+        return True
+    # Handle KeyboardInterrupt
+    if isinstance(error, KeyboardInterrupt):
+        return True
+    return False
+
+
+def format_tool_error(tool_name: str, error: Exception) -> str:
+    """Format a tool error into a structured message for model self-correction.
+
+    Returns a message that tells the model exactly what went wrong,
+    so it can adjust its approach.
+    """
+    if isinstance(error, ToolValidationError):
+        return str(error)
+    if isinstance(error, ShellError):
+        parts = [f'{tool_name} command failed (exit code {error.exit_code})']
+        if error.stderr:
+            parts.append(f'stderr: {error.stderr[:500]}')
+        if error.stdout:
+            parts.append(f'stdout: {error.stdout[:500]}')
+        return '\n'.join(parts)
+    if isinstance(error, ValidationError):
+        return f'{tool_name}: {error.message}'
+    return f'{tool_name} error: {str(error)}'
 
 
 def format_error(error: Exception) -> dict[str, Any]:
