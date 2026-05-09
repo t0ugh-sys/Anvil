@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Tuple
 
 from .agent_protocol import ToolCall, ToolResult
 from .background import BackgroundCommandRunner
@@ -18,15 +18,23 @@ from .permissions import PermissionMode
 from .policies import ToolPolicy
 from .policies import TOOL_CAPABILITIES
 from .tool_spec import ToolRisk, ToolSpec
-from .todo import render_todo_lines
+from .todo import TodoManager, render_todo_lines
+
+if TYPE_CHECKING:
+    from .skills import SkillLoader
+
+# Constants
+MAX_FETCH_URL_CHARS = 5000
+MAX_SEARCH_SNIPPET_CHARS = 200
+MAX_WEB_RESULT_TITLE_CHARS = 120
 
 
 @dataclass(frozen=True)
 class ToolContext:
     workspace_root: Path
     policy: ToolPolicy = ToolPolicy.allow_all()
-    todo_manager: Any = None
-    skill_loader: Any = None
+    todo_manager: TodoManager | None = None
+    skill_loader: SkillLoader | None = None
     compact_manager: CompactManager | None = None
     background_runner: BackgroundCommandRunner | None = None
 
@@ -59,9 +67,11 @@ def _iter_searchable_files(workspace_root: Path) -> Iterable[Path]:
 
 
 def _resolve_inside_workspace(workspace_root: Path, relative_path: str) -> Path:
+    if '\0' in relative_path:
+        raise ValueError('path contains null bytes')
     root = workspace_root.resolve()
     target = (workspace_root / relative_path).resolve()
-    if os.path.commonpath([str(root), str(target)]) != str(root):
+    if not target.is_relative_to(root):
         raise ValueError('path escapes workspace root')
     return target
 
@@ -228,7 +238,6 @@ def search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
         return ToolResult(id=call_id, ok=False, output='', error='pattern is required')
 
     try:
-        import subprocess
         # Try grep first (fast), fallback to Python search
         try:
             result = subprocess.run(
@@ -328,7 +337,7 @@ def web_search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
             # Clean up HTML tags from title and snippet
             title_clean = re.sub(r'<[^>]+>', '', title).strip()
             snippet_clean = re.sub(r'<[^>]+>', '', snippet).strip()
-            results.append(f'{i}. {title_clean}\n   URL: {link}\n   {snippet_clean[:200]}')
+            results.append(f'{i}. {title_clean}\n   URL: {link}\n   {snippet_clean[:MAX_SEARCH_SNIPPET_CHARS]}')
         
         if not results:
             return ToolResult(id=call_id, ok=True, output='No results found', error=None)
@@ -339,12 +348,32 @@ def web_search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
         return ToolResult(id=call_id, ok=False, output='', error=str(exc))
 
 
+_ALLOWED_URL_SCHEMES = frozenset({'http', 'https'})
+_BLOCKED_URL_HOSTS = frozenset({
+    '169.254.169.254',  # AWS/GCP/Azure metadata
+    'metadata.google.internal',
+    'localhost',
+    '127.0.0.1',
+    '::1',
+})
+
+
 def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Fetch content from a specific URL."""
     url = str(args.get('url', '')).strip()
     call_id = str(args.get('id', 'fetch_url'))
     if not url:
         return ToolResult(id=call_id, ok=False, output='', error='url is required')
+
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+            return ToolResult(id=call_id, ok=False, output='', error=f'blocked URL scheme: {parsed.scheme}')
+        if parsed.hostname in _BLOCKED_URL_HOSTS:
+            return ToolResult(id=call_id, ok=False, output='', error='blocked URL host')
+    except Exception:
+        return ToolResult(id=call_id, ok=False, output='', error='invalid URL')
 
     try:
         headers = {
@@ -366,9 +395,8 @@ def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
         text = re.sub(r' +', ' ', text)
         
         # Limit output size
-        max_chars = 5000
-        if len(text) > max_chars:
-            text = text[:max_chars] + f'\n\n... (truncated, total {len(text)} chars)'
+        if len(text) > MAX_FETCH_URL_CHARS:
+            text = text[:MAX_FETCH_URL_CHARS] + f'\n\n... (truncated, total {len(text)} chars)'
         
         return ToolResult(id=call_id, ok=True, output=text.strip(), error=None)
     except Exception as exc:

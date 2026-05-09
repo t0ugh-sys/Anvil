@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Mapping, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Tuple
+
+if TYPE_CHECKING:
+    from .permissions import PermissionManager
 
 
 class Capability(str, Enum):
@@ -53,7 +56,7 @@ TOOL_CAPABILITIES: Dict[str, Tuple[Capability, ...]] = {
 class ToolPolicy:
     allowed: Tuple[Capability, ...] = field(default_factory=tuple)
     denied: Tuple[Capability, ...] = field(default_factory=tuple)
-    permission_manager: Any = None
+    permission_manager: PermissionManager | None = None
 
     @classmethod
     def allow_all(cls) -> 'ToolPolicy':

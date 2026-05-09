@@ -7,6 +7,9 @@ from typing import Any, Dict, Optional
 
 from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 
+MAX_HISTORY_TAIL = 20
+MAX_TOOL_HISTORY = 50
+
 
 def _default_session_id() -> str:
     return utc_now_iso().replace(':', '').replace('-', '').replace('+00:00', 'Z')
@@ -166,13 +169,13 @@ class SessionStore:
             if isinstance(content, str) and content:
                 prefix = f'{role}: ' if isinstance(role, str) and role else ''
                 self.state.history_tail.append(prefix + content)
-                self.state.history_tail = self.state.history_tail[-20:]
+                self.state.history_tail = self.state.history_tail[-MAX_HISTORY_TAIL:]
                 self.state.status = 'active'
         if event == 'step_succeeded':
             output = payload.get('output')
             if isinstance(output, str) and output:
                 self.state.history_tail.append(output)
-                self.state.history_tail = self.state.history_tail[-20:]
+                self.state.history_tail = self.state.history_tail[-MAX_HISTORY_TAIL:]
             metadata = payload.get('metadata', {})
             if isinstance(metadata, dict):
                 todo_state = metadata.get('todo_state')
@@ -202,7 +205,7 @@ class SessionStore:
                             'permission_reason': result.get('permission_reason'),
                         }
                     )
-                    self.state.tool_history = self.state.tool_history[-50:]
+                    self.state.tool_history = self.state.tool_history[-MAX_TOOL_HISTORY:]
                     mode = result.get('permission_decision')
                     if isinstance(mode, str) and mode in self.state.permission_stats:
                         self.state.permission_stats[mode] = self.state.permission_stats.get(mode, 0) + 1

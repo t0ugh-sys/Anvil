@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Any, Callable
 
@@ -385,7 +386,7 @@ def list_loaded_skills() -> list[str]:
 
 # ============== CLI Integration ==============
 
-def add_skill_arguments(parser: Any) -> None:
+def add_skill_arguments(parser: argparse.ArgumentParser) -> None:
     """Add skill-related arguments to an argument parser."""
     parser.add_argument(
         '--skill',
@@ -396,7 +397,7 @@ def add_skill_arguments(parser: Any) -> None:
     )
 
 
-def load_skills_from_args(args: Any) -> SkillLoader:
+def load_skills_from_args(args: argparse.Namespace) -> SkillLoader:
     """Load skills from parsed arguments."""
     loader = SkillLoader()
     

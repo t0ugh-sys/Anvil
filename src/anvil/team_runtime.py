@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 from .coding_agent import DeciderFn, run_coding_agent
 from .core.serialization import run_result_to_dict
-from .core.types import StopConfig
+from .core.types import RunResult, StopConfig
 from .policies import ToolPolicy
 from .skills import SkillLoader
 from .task_graph import Task, TaskGraph, TaskStatus
@@ -463,7 +463,7 @@ class PersistentTeamRuntime:
                 self.config_store.update_member_status(spec.name, 'idle')
                 self.dispatch_ready_tasks(sender='scheduler')
 
-    def _complete_task(self, task_id: str, teammate_name: str, done: bool, result) -> None:
+    def _complete_task(self, task_id: str, teammate_name: str, done: bool, result: RunResult) -> None:
         with self._lock:
             graph = self.task_store.load_graph()
             if done:

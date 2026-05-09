@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
 
 from .entrypoints.parser_builders import (
     register_doctor_parser,
@@ -25,29 +24,7 @@ from .services.team_service import (
     run_team_shutdown_command as _team_service_run_team_shutdown_command,
 )
 from .ops.doctor import format_doctor_report, run_provider_doctor
-from .tools import builtin_tool_specs
 from .utils import default_run_id
-
-
-def _build_coding_prompt(
-    *,
-    goal: str,
-    history: Tuple[str, ...],
-    tool_results: Tuple[Any, ...],
-    state_summary: Dict[str, object],
-    last_steps: Tuple[str, ...],
-    history_window: int,
-    skills=None,
-) -> str:
-    return _coding_runtime.build_coding_prompt(
-        goal=goal,
-        history=history,
-        tool_results=tool_results,
-        state_summary=state_summary,
-        last_steps=last_steps,
-        history_window=history_window,
-        skills=skills,
-    )
 
 
 def _build_coding_decider(args: argparse.Namespace, skills=None):
