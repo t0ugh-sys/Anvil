@@ -26,11 +26,12 @@ browser = ["playwright"]
 all = ["playwright"]
 dev = []
 tui = ["textual>=0.86.2"]
+chat = ["rich>=13.0"]
 
 [project.scripts]
 anvil = "anvil.entrypoints.agent:main"
 anvil-core = "anvil.cli:main"
-anvil-chat = "anvil.ui.tui_chat:main"
+anvil-chat = "anvil.ui.rich_chat:main"
 
 [project.urls]
 Homepage = "https://github.com/t0ugh-sys/Anvil"
