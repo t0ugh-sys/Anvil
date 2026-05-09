@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 
 MAX_HISTORY_TAIL = 20
 MAX_TOOL_HISTORY = 50
+TAIL_WINDOW_BYTES = 16 * 1024  # 16KB tail window for fast metadata reads
+DIRTY_WRITE_INTERVAL_S = 5.0  # Write session state at most every 5s when dirty
 
 
 def _default_session_id() -> str:
@@ -87,6 +91,8 @@ class SessionStore:
         self.session_file = self.session_dir / 'session.json'
         self.events_file = self.session_dir / 'events.jsonl'
         self.summary_file = self.session_dir / 'summary.json'
+        self._dirty = False
+        self._last_write_time = 0.0
         self._write_session()
         if not self.summary_file.exists():
             self.write_summary({})
@@ -236,3 +242,141 @@ class SessionStore:
 
     def _write_session(self) -> None:
         self.session_file.write_text(json.dumps(self.state.to_dict(), ensure_ascii=False, indent=2), encoding='utf-8')
+        self._dirty = False
+        self._last_write_time = time.monotonic()
+
+    def mark_dirty(self) -> None:
+        """Mark session state as needing a write."""
+        self._dirty = True
+
+    def flush_if_dirty(self) -> bool:
+        """Write session state if dirty and enough time has passed.
+
+        Returns True if a write was performed.
+        """
+        if not self._dirty:
+            return False
+        now = time.monotonic()
+        if now - self._last_write_time < DIRTY_WRITE_INTERVAL_S:
+            return False
+        self._write_session()
+        return True
+
+    def force_flush(self) -> None:
+        """Force write session state regardless of dirty/timing."""
+        if self._dirty:
+            self._write_session()
+
+    @classmethod
+    def load_fast(cls, *, root_dir: Path, session_id: str) -> 'SessionStore':
+        """Fast session load using JSONL tail window.
+
+        Instead of reading the full session.json, reads only the last 16KB
+        of events.jsonl to reconstruct recent state. Falls back to full
+        load if the tail window is insufficient.
+        """
+        session_dir = root_dir / session_id
+        session_file = session_dir / 'session.json'
+        events_file = session_dir / 'events.jsonl'
+
+        # Try tail-window fast path
+        if events_file.exists():
+            try:
+                state = cls._rebuild_from_tail(events_file, session_id)
+                if state is not None:
+                    store = cls.__new__(cls)
+                    store.root_dir = root_dir
+                    store.state = state
+                    store.session_dir = session_dir
+                    store.session_file = session_file
+                    store.events_file = events_file
+                    store.summary_file = session_dir / 'summary.json'
+                    store._dirty = False
+                    store._last_write_time = time.monotonic()
+                    return store
+            except Exception:
+                pass  # Fall through to full load
+
+        # Fallback: full load from session.json
+        return cls.load(root_dir=root_dir, session_id=session_id)
+
+    @classmethod
+    def _rebuild_from_tail(cls, events_file: Path, session_id: str) -> SessionState | None:
+        """Rebuild session state from the tail of the JSONL events file.
+
+        Reads the last TAIL_WINDOW_BYTES to get recent events, then
+        reconstructs the state. Returns None if insufficient data.
+        """
+        file_size = events_file.stat().st_size
+        if file_size == 0:
+            return None
+
+        # Read tail window
+        read_size = min(file_size, TAIL_WINDOW_BYTES)
+        with events_file.open('rb') as f:
+            if file_size > read_size:
+                f.seek(file_size - read_size)
+            raw = f.read(read_size).decode('utf-8', errors='replace')
+
+        # Parse JSONL lines (skip partial first line if we seeked)
+        lines = raw.split('\n')
+        if file_size > read_size and lines:
+            lines = lines[1:]  # Skip potentially partial first line
+
+        events: List[Dict[str, Any]] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        if not events:
+            return None
+
+        # Rebuild state from events
+        now = utc_now_iso()
+        state = SessionState(
+            session_id=session_id,
+            workspace_root='',
+            goal='',
+            status='active',
+            created_at=now,
+            updated_at=now,
+        )
+
+        for event in events:
+            event_name = event.get('event', '')
+            payload = event.get('payload', {})
+            if not isinstance(payload, dict):
+                continue
+
+            if event_name == 'run_started':
+                goal = payload.get('goal')
+                if isinstance(goal, str):
+                    state.goal = goal
+
+            if event_name in {'chat_user', 'chat_assistant'}:
+                content = payload.get('content')
+                role = payload.get('role')
+                if isinstance(content, str) and content:
+                    prefix = f'{role}: ' if isinstance(role, str) and role else ''
+                    state.history_tail.append(prefix + content)
+                    state.history_tail = state.history_tail[-MAX_HISTORY_TAIL:]
+
+            if event_name == 'step_succeeded':
+                metadata = payload.get('metadata', {})
+                if isinstance(metadata, dict):
+                    todo = metadata.get('todo_state')
+                    if isinstance(todo, dict):
+                        state.todo_state = dict(todo)
+                    comp = metadata.get('compression_state')
+                    if isinstance(comp, dict):
+                        state.last_summary = str(comp.get('summary', ''))
+
+            if event_name == 'run_finished':
+                state.status = 'completed' if payload.get('done') else 'stopped'
+
+        return state

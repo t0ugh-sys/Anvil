@@ -11,6 +11,8 @@ from typing import Callable, Dict, List, Optional, Set
 InvokeFn = Callable[[str], str]
 ChatInvokeFn = Callable[[List[Dict[str, str]]], str]
 
+from ..retry import NonRetryableError, RetryExhausted, with_retry
+
 DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
 
 
@@ -29,33 +31,21 @@ def _request_with_retry(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
 ) -> dict:
-    """Execute HTTP request with exponential backoff retry.
-
-    Args:
-        request_fn: Function that makes the HTTP request and returns response dict
-        max_retries: Maximum number of retry attempts
-        retry_backoff_s: Base backoff time in seconds
-        retry_http_codes: HTTP status codes that should trigger retry
-
-    Returns:
-        Response dict from request_fn
-
-    Raises:
-        ProviderHttpError: If request fails with non-retryable error or all retries exhausted
-    """
-    last_error: Optional[ProviderHttpError] = None
-    for attempt in range(max_retries + 1):
-        try:
-            return request_fn()
-        except ProviderHttpError as exc:
-            last_error = exc
-            if exc.status_code in retry_http_codes and attempt < max_retries:
-                time.sleep(retry_backoff_s * (2**attempt))
-                continue
-            break
-    if last_error is not None:
-        raise last_error
-    raise ValueError('request failed without raising exception')
+    """Execute HTTP request with exponential backoff retry."""
+    try:
+        return with_retry(
+            request_fn,
+            max_retries=max_retries,
+            base_backoff_s=retry_backoff_s,
+            retryable_codes=retry_http_codes,
+            get_status_code=lambda e: getattr(e, 'status_code', None),
+            get_body=lambda e: getattr(e, 'body', ''),
+        )
+    except (RetryExhausted, NonRetryableError) as exc:
+        # Convert to ProviderHttpError for backward compatibility
+        status = getattr(exc, 'last_status_code', None) or getattr(exc, 'status_code', 0)
+        body = getattr(exc, 'last_body', None) or getattr(exc, 'body', '')
+        raise ProviderHttpError(status_code=status, body=body) from exc
 
 
 def _anthropic_invoke_factory(
