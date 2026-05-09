@@ -164,12 +164,10 @@ class TeamConfigStore:
         return updated
 
     def _write_config(self, config: TeamConfig) -> None:
-        temp_file = self.config_file.with_suffix(f'{self.config_file.suffix}.tmp')
-        temp_file.write_text(
+        self.config_file.write_text(
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2),
             encoding='utf-8',
         )
-        temp_file.replace(self.config_file)
 
     def member_names(self) -> Tuple[str, ...]:
         return tuple(member.name for member in self.load().members)
