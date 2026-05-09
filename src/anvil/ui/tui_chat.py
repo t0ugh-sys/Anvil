@@ -323,6 +323,7 @@ def run(argv: Optional[list[str]] = None) -> int:
 
     class ChatApp(App):
         TITLE = 'Anvil'
+        COMMAND_PALETTE = False
         CSS = """
         Screen {
             layout: vertical;
