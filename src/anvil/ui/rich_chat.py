@@ -103,6 +103,20 @@ def _help_text() -> str:
     )
 
 
+def _model_candidates(provider: str) -> list[str]:
+    if provider == 'openai_compatible':
+        return ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'o3-mini']
+    if provider == 'anthropic':
+        return [
+            'claude-sonnet-4-6', 'claude-haiku-4-5-20251001',
+            'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest',
+            'mimo-v2.5-pro', 'mimo-v2-pro',
+        ]
+    if provider == 'gemini':
+        return ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']
+    return []
+
+
 def _build_provider_config(current_cfg: ChatConfig, provider: str) -> ChatConfig:
     provider = provider.strip()
     if provider not in PROVIDERS:
@@ -294,7 +308,13 @@ def run(argv: Optional[list[str]] = None) -> int:
 
             if cmd == '/model':
                 if not arg:
-                    console.print('[anvil.info]Usage: /model <name>[/anvil.info]')
+                    candidates = _model_candidates(cfg.provider)
+                    current = cfg.model
+                    console.print('[bold]Available models:[/bold]')
+                    for m in candidates:
+                        marker = ' [green]*[/green]' if m == current else ''
+                        console.print(f'  [cyan]{m}[/cyan]{marker}')
+                    console.print(f'\n[anvil.info]Usage: /model <name>[/anvil.info]')
                     continue
                 try:
                     new_cfg = _build_model_config(cfg, arg)
@@ -307,7 +327,12 @@ def run(argv: Optional[list[str]] = None) -> int:
 
             if cmd == '/provider':
                 if not arg:
-                    console.print('[anvil.info]Available: ' + ', '.join(PROVIDERS) + '[/anvil.info]')
+                    console.print('[bold]Available providers:[/bold]')
+                    for p in PROVIDERS:
+                        label = PROVIDER_LABELS.get(p, p)
+                        marker = ' [green]*[/green]' if p == cfg.provider else ''
+                        console.print(f'  [cyan]{p}[/cyan] - {label}{marker}')
+                    console.print(f'\n[anvil.info]Usage: /provider <name>[/anvil.info]')
                     continue
                 try:
                     new_cfg = _build_provider_config(cfg, arg)
