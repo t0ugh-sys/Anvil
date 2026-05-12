@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import sys
 import unittest
 
@@ -17,6 +18,13 @@ from anvil.hooks import (
     run_hook,
     run_hooks_for_event,
 )
+
+
+def hook_command(payload: dict[str, object]) -> str:
+    rendered = json.dumps(payload).encode('utf-8')
+    encoded = base64.b64encode(rendered).decode('ascii')
+    code = f"import base64; print(base64.b64decode('{encoded}').decode())"
+    return f'"{sys.executable}" -c "{code}"'
 
 
 class HookInputTests(unittest.TestCase):
@@ -85,7 +93,7 @@ class HookOutputTests(unittest.TestCase):
 
 class RunHookTests(unittest.TestCase):
     def test_should_run_echo_command(self) -> None:
-        config = HookConfig(command='echo {"approve": true}')
+        config = HookConfig(command=hook_command({'approve': True}))
         inp = HookInput(event='PreToolUse')
         output = run_hook(config, inp, timeout_s=5)
         self.assertTrue(output.approve)
@@ -117,8 +125,8 @@ class RunHookTests(unittest.TestCase):
 class RunHooksForEventTests(unittest.TestCase):
     def test_should_run_multiple_hooks(self) -> None:
         hooks = [
-            HookConfig(command='echo {"approve": true, "context": "hook1"}'),
-            HookConfig(command='echo {"approve": true, "context": "hook2"}'),
+            HookConfig(command=hook_command({'approve': True, 'context': 'hook1'})),
+            HookConfig(command=hook_command({'approve': True, 'context': 'hook2'})),
         ]
         inp = HookInput(event='PreToolUse')
         result = run_hooks_for_event(HookEvent.PreToolUse, hooks, inp)
@@ -129,8 +137,8 @@ class RunHooksForEventTests(unittest.TestCase):
 
     def test_should_block_if_any_hook_blocks(self) -> None:
         hooks = [
-            HookConfig(command='echo {"approve": true}'),
-            HookConfig(command='echo {"approve": false, "error": "blocked"}'),
+            HookConfig(command=hook_command({'approve': True})),
+            HookConfig(command=hook_command({'approve': False, 'error': 'blocked'})),
         ]
         inp = HookInput(event='PreToolUse')
         result = run_hooks_for_event(HookEvent.PreToolUse, hooks, inp)
@@ -141,7 +149,7 @@ class RunHooksForEventTests(unittest.TestCase):
 
     def test_should_return_modified_input(self) -> None:
         hooks = [
-            HookConfig(command='echo {"approve": true, "modified_input": {"path": "modified.py"}}'),
+            HookConfig(command=hook_command({'approve': True, 'modified_input': {'path': 'modified.py'}})),
         ]
         inp = HookInput(event='PreToolUse')
         result = run_hooks_for_event(HookEvent.PreToolUse, hooks, inp)
@@ -150,8 +158,8 @@ class RunHooksForEventTests(unittest.TestCase):
 
     def test_should_skip_async_hooks_in_result_count(self) -> None:
         hooks = [
-            HookConfig(command='echo {"approve": true}', async_mode=True),
-            HookConfig(command='echo {"approve": true}'),
+            HookConfig(command=hook_command({'approve': True}), async_mode=True),
+            HookConfig(command=hook_command({'approve': True})),
         ]
         inp = HookInput(event='PostToolUse')
         result = run_hooks_for_event(HookEvent.PostToolUse, hooks, inp)

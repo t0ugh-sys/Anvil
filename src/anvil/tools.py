@@ -84,6 +84,8 @@ def _iter_searchable_files(workspace_root: Path) -> Iterable[Path]:
 def _resolve_inside_workspace(workspace_root: Path, relative_path: str) -> Path:
     if '\0' in relative_path:
         raise ValueError('path contains null bytes')
+    if any(part == '..' for part in relative_path.replace('\\', '/').split('/')):
+        raise ValueError('path escapes workspace root')
     root = workspace_root.resolve()
     target = (workspace_root / relative_path).resolve()
     if not target.is_relative_to(root):
