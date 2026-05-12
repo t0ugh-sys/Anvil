@@ -34,10 +34,20 @@ class AgentStep:
 
 
 def parse_agent_step(raw: str) -> Optional[AgentStep ]:
+    # Strip markdown code blocks if present
+    text = raw.strip()
+    if text.startswith('```'):
+        # Remove ```json or ``` at the start
+        first_newline = text.find('\n')
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+        # Remove ``` at the end
+        if text.endswith('```'):
+            text = text[:-3].rstrip()
     try:
-        payload = json.loads(raw)
+        payload = json.loads(text)
     except json.JSONDecodeError:
-        return None
+        payload = _load_first_json_object(text)
     if not isinstance(payload, dict):
         return None
 
@@ -71,10 +81,26 @@ def parse_agent_step(raw: str) -> Optional[AgentStep ]:
     return AgentStep(thought=thought, plan=plan, tool_calls=tool_calls, final=final)
 
 
+def _load_first_json_object(text: str) -> Any:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != '{':
+            continue
+        try:
+            payload, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
 def render_agent_step_schema() -> str:
     return (
-        '{"thought":"...","plan":["..."],'
-        '"tool_calls":[{"id":"call_1","name":"read_file","arguments":{"path":"README.md"}},'
-        '{"id":"call_2","name":"apply_patch","arguments":{"patch":"*** Begin Patch\\n*** Update File: README.md\\n@@\\n-old\\n+new\\n*** End Patch"}}],'
-        '"final":null}'
+        'Required JSON object fields: '
+        'thought:string, '
+        'plan:string[], '
+        'tool_calls:{id:string,name:string,arguments:object}[], '
+        'final:string|null. '
+        'Use final only after the requested work is complete.'
     )

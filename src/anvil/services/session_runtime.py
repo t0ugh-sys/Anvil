@@ -8,6 +8,7 @@ from typing import List
 
 from ..coding_agent import run_coding_agent
 from ..core.types import StopConfig
+from ..llm.providers import build_invoke_from_args
 from ..runtime import CodeRuntime
 from ..session import SessionStore
 from ..tools import builtin_tool_specs
@@ -77,9 +78,109 @@ def should_launch_interactive(argv: List[str]) -> bool:
     return first not in {'code', 'tools', 'skills', 'replay', 'team', 'doctor'}
 
 
+def _extract_interactive_output(payload: dict) -> str:
+    final_output = str(payload.get('final_output') or '').strip()
+    if final_output:
+        return final_output
+
+    error = str(payload.get('error') or '').strip()
+    if error:
+        return f'Run failed: {error}'
+
+    history = payload.get('history')
+    if isinstance(history, list):
+        for item in reversed(history):
+            text = str(item or '').strip()
+            if text:
+                return text
+
+    last_steps = payload.get('memory_last_steps')
+    if isinstance(last_steps, list):
+        for item in reversed(last_steps):
+            text = str(item or '').strip()
+            if text:
+                return text
+
+    stop_reason = str(payload.get('stop_reason') or 'unknown').strip()
+    return f'Stopped without final output (reason: {stop_reason}).'
+
+
+def _format_chat_history(history_tail: list[str], *, current_user_text: str, limit: int = 12) -> str:
+    filtered = list(history_tail)
+    current_entry = f'user: {current_user_text}'
+    if filtered and filtered[-1] == current_entry:
+        filtered = filtered[:-1]
+    return '\n'.join(filtered[-limit:])
+
+
+def _run_plain_chat_fallback(
+    base_args: argparse.Namespace,
+    user_text: str,
+    *,
+    history_tail: list[str] | None = None,
+) -> str:
+    if str(getattr(base_args, 'provider', 'mock')) == 'mock':
+        return ''
+    invoke = build_invoke_from_args(base_args, mode='chat')
+    history = _format_chat_history(history_tail or [], current_user_text=user_text)
+    prompt = (
+        'You are Anvil, an interactive terminal coding assistant. '
+        'Answer the user directly and concisely. Use the conversation history when it is relevant.\n\n'
+        + (f'Conversation history:\n{history}\n\n' if history else '')
+        + 'User:\n'
+        + user_text
+    )
+    return invoke(prompt).strip()
+
+
+def _should_use_plain_chat_fallback(output: str) -> bool:
+    text = output.strip()
+    if text.startswith('Stopped without final output'):
+        return True
+    provider_format_errors = (
+        'invalid agent step json',
+        'invalid Anthropic response format',
+        'invalid openai-compatible response',
+        'invalid Gemini response format',
+    )
+    return any(item in text for item in provider_format_errors)
+
+
+def _looks_like_action_request(user_text: str) -> bool:
+    normalized = user_text.lower()
+    action_tokens = (
+        '\u65b0\u589e',
+        '\u521b\u5efa',
+        '\u65b0\u5efa',
+        '\u5199\u5165',
+        '\u5199\u5230',
+        '\u4fee\u6539',
+        '\u5220\u9664',
+        'create',
+        'write',
+        'edit',
+        'delete',
+    )
+    target_tokens = (
+        '\u6587\u4ef6',
+        '\u6587\u4ef6\u5939',
+        '\u76ee\u5f55',
+        '.txt',
+        '.md',
+        '.json',
+        'file',
+        'folder',
+        'directory',
+    )
+    return any(token in normalized for token in action_tokens) and any(
+        token in normalized for token in target_tokens
+    )
+
+
 def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
     def run_turn(user_text: str) -> str:
         turn_args = copy.deepcopy(base_args)
+        turn_args.interactive_trusted_workspace = True
         turn_args.session_id = session_id
         turn_args.goal = user_text
         turn_args.goal_file = ''
@@ -104,7 +205,18 @@ def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: 
             summarizer=summarizer,
         )
         payload = runtime.finalize(result)
-        return str(payload.get('final_output', '') or '')
+        output = _extract_interactive_output(payload)
+        if _should_use_plain_chat_fallback(output):
+            if _looks_like_action_request(user_text):
+                return output
+            fallback = _run_plain_chat_fallback(
+                base_args,
+                user_text,
+                history_tail=list(runtime.session_store.state.history_tail),
+            )
+            if fallback:
+                return fallback
+        return output
 
     return run_turn
 
@@ -132,5 +244,7 @@ def run_interactive_command(args: argparse.Namespace, *, default_run_id: str) ->
         run_turn=build_interactive_turn_runner(args, session_id=session_store.state.session_id),
         stdin=sys.stdin,
         stdout=sys.stdout,
+        model=str(args.model),
+        permission_mode=str(args.permission_mode),
     )
     return runtime.run()

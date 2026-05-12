@@ -276,6 +276,8 @@ def run(argv: Optional[list[str]] = None) -> int:
                 'gpt-4.1-mini',
                 'gpt-4.1',
                 'o3-mini',
+                'mimo-v2.5-pro',
+                'mimo-v2-pro',
             ]
         if provider == 'anthropic':
             return [

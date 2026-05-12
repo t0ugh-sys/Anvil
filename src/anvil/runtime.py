@@ -8,7 +8,7 @@ from .compression import CompressionConfig
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, StopConfig
 from .memory.jsonl_store import JsonlMemoryStore
-from .permissions import PermissionManager
+from .permissions import PermissionManager, PermissionRule, PermissionRuleSet
 from .policies import Capability, ToolPolicy
 from .run_recorder import RunRecorder
 from .session import SessionStore
@@ -29,8 +29,10 @@ class CodeRuntime:
         )
         self.transcripts_dir = (self.workspace_root / args.transcripts_dir).resolve() if args.transcripts_dir else None
         self.run_id = args.run_id or default_run_id()
+        permission_rule_sets = self._build_permission_rule_sets(args)
         self.permission_manager = PermissionManager(
             mode_name=str(getattr(args, 'permission_mode', 'balanced')),
+            rule_sets=permission_rule_sets,
         )
 
         sessions_dir_value = str(getattr(args, 'sessions_dir', '.anvil/sessions'))
@@ -47,6 +49,7 @@ class CodeRuntime:
             existing_cache = self.session_store.state.permission_cache
             self.permission_manager = PermissionManager(
                 mode_name=str(getattr(args, 'permission_mode', 'balanced')),
+                rule_sets=permission_rule_sets,
                 cache=existing_cache,
             )
             memory_dir_value = self.session_store.state.memory_run_dir or str(Path(args.memory_dir) / self.run_id)
@@ -62,6 +65,18 @@ class CodeRuntime:
         self.recorder: Optional[RunRecorder] = None
         self.memory_store = JsonlMemoryStore(memory_dir=self.memory_run_dir, summarize_every=args.summarize_every)
         self.observer = self._build_observer()
+
+    def _build_permission_rule_sets(self, args) -> tuple[PermissionRuleSet, ...]:
+        if not bool(getattr(args, 'interactive_trusted_workspace', False)):
+            return tuple()
+        if str(getattr(args, 'permission_mode', 'balanced')) != 'balanced':
+            return tuple()
+        return (
+            PermissionRuleSet(
+                source='session',
+                rules=(PermissionRule(tool_pattern='write_file', mode='allow', source='session'),),
+            ),
+        )
 
     def _build_observer(self) -> Optional[ObserverFn]:
         observers: List[ObserverFn] = []

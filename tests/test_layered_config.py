@@ -187,16 +187,16 @@ class BuildLayeredConfigTests(unittest.TestCase):
 
     def test_should_include_project_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / '.anvil.yaml'
+            config_path = Path(tmpdir) / '.anvil.json'
             config_path.write_text(json.dumps({'model': 'claude-3'}))
             config = build_layered_config(workspace_root=Path(tmpdir))
             self.assertEqual(config.get_flat('model'), 'claude-3')
 
     def test_should_include_local_over_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            project_path = Path(tmpdir) / '.anvil.yaml'
+            project_path = Path(tmpdir) / '.anvil.json'
             project_path.write_text(json.dumps({'model': 'gpt-4'}))
-            local_path = Path(tmpdir) / '.anvil.local.yaml'
+            local_path = Path(tmpdir) / '.anvil.local.json'
             local_path.write_text(json.dumps({'model': 'claude-3'}))
             config = build_layered_config(workspace_root=Path(tmpdir))
             self.assertEqual(config.get_flat('model'), 'claude-3')

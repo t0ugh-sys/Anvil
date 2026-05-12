@@ -74,6 +74,188 @@ class ToolUseLoopTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_should_execute_tool_when_model_adds_text_after_json(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return (
+                    '{"thought":"create","plan":["write file"],'
+                    '"tool_calls":[{"id":"call_1","name":"write_file",'
+                    '"arguments":{"path":"abc/data.json","content":""}}],'
+                    '"final":null}'
+                    '\nI will create the requested file now.'
+                )
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='create empty json file',
+                state=ToolUseState(),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+
+            result = step(context)
+
+            self.assertFalse(result.done)
+            self.assertTrue((tmp_dir / 'abc' / 'data.json').is_file())
+            self.assertEqual((tmp_dir / 'abc' / 'data.json').read_text(encoding='utf-8'), '')
+            self.assertTrue(result.metadata.get('has_tool_calls'))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_not_finish_file_action_without_tool_calls(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return '{"thought":"","plan":[],"tool_calls":[],"final":"done"}'
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='在D:\\workspace新增一个abc，并在abc新增一个空白的json文件',
+                state=ToolUseState(),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+
+            result = step(context)
+
+            self.assertFalse(result.done)
+            self.assertEqual(result.metadata.get('missing_tool_calls'), True)
+            self.assertIn('tool action required', result.output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_not_finish_file_action_with_no_tools_and_null_final(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return '{"thought":"","plan":[],"tool_calls":[],"final":null}'
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='create an empty json file',
+                state=ToolUseState(),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+
+            result = step(context)
+
+            self.assertFalse(result.done)
+            self.assertEqual(result.metadata.get('missing_tool_calls'), True)
+            self.assertIn('tool action required', result.output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_not_finish_after_unresolved_tool_error(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            responses = iter(
+                [
+                    '{"thought":"try write","plan":["write"],'
+                    '"tool_calls":[{"id":"call_1","name":"write_file",'
+                    '"arguments":{"path":"..\\\\abc\\\\data.json","content":""}}],'
+                    '"final":null}',
+                    '{"thought":"","plan":[],"tool_calls":[],"final":"done"}',
+                ]
+            )
+
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return next(responses)
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            first = step(
+                StepContext(
+                    goal='create json file',
+                    state=ToolUseState(),
+                    step_index=0,
+                    started_at_s=0.0,
+                    now_s=0.0,
+                    history=tuple(),
+                )
+            )
+            second = step(
+                StepContext(
+                    goal='create json file',
+                    state=first.state,
+                    step_index=1,
+                    started_at_s=0.0,
+                    now_s=0.0,
+                    history=(first.output,),
+                )
+            )
+
+            self.assertFalse(second.done)
+            self.assertEqual(second.metadata.get('unresolved_tool_error'), True)
+            self.assertIn('tool action failed:', second.output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_finish_file_action_after_successful_write_tool(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            responses = iter(
+                [
+                    json.dumps(
+                        {
+                            'thought': 'write requested file',
+                            'plan': ['write json'],
+                            'tool_calls': [
+                                {
+                                    'id': 'call_1',
+                                    'name': 'write_file',
+                                    'arguments': {'path': 'abc/current-path.json', 'content': str(tmp_dir)},
+                                }
+                            ],
+                            'final': None,
+                        }
+                    ),
+                    '{"thought":"done","plan":[],"tool_calls":[],"final":"done"}',
+                ]
+            )
+
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return next(responses)
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            first = step(
+                StepContext(
+                    goal='create an empty json file containing current path',
+                    state=ToolUseState(),
+                    step_index=0,
+                    started_at_s=0.0,
+                    now_s=0.0,
+                    history=tuple(),
+                )
+            )
+            second = step(
+                StepContext(
+                    goal='create an empty json file containing current path',
+                    state=first.state,
+                    step_index=1,
+                    started_at_s=0.0,
+                    now_s=0.0,
+                    history=(first.output,),
+                )
+            )
+
+            self.assertTrue(second.done)
+            self.assertEqual(second.output, 'done')
+            self.assertTrue((tmp_dir / 'abc' / 'current-path.json').is_file())
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def test_should_append_thought_and_tool_history(self) -> None:
         tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -231,6 +413,31 @@ class ToolUseLoopTests(unittest.TestCase):
             self.assertEqual(summary['task_state']['counts']['total'], 2)
             self.assertEqual(summary['task_state']['ready'][0]['id'], 't1')
             self.assertEqual(summary['task_state']['pending'][0]['id'], 't2')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_inject_workspace_root_into_state_summary(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        captured = {}
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                captured['state_summary'] = state_summary
+                return '{"thought":"done now","plan":[],"tool_calls":[],"final":null}'
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='x',
+                state=ToolUseState(),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+
+            step(context)
+
+            self.assertEqual(captured['state_summary']['workspace']['root'], str(tmp_dir))
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
