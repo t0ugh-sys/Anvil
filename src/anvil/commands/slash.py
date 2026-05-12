@@ -79,6 +79,7 @@ def execute_slash_command(
                 'Commands:\n'
                 '/help   Show this help\n'
                 '/status Show the current session status\n'
+                '/model  Show the current model\n'
                 '/summary Show the current compressed session summary\n'
                 '/history Show recent transcript history\n'
                 '/events Show recent recorded session events\n'

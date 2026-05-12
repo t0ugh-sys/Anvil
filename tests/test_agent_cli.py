@@ -27,6 +27,15 @@ from anvil.commands import (
 from anvil.services.event_viewer import render_event_row
 from anvil.services.catalog_service import render_skills, render_tools
 from anvil.services.replay_service import render_replay, resolve_events_file
+from anvil.services.coding_runtime import build_coding_prompt
+from anvil.agent_protocol import ToolResult
+from anvil.services.session_runtime import (
+    _extract_interactive_output,
+    _format_chat_history,
+    _looks_like_action_request,
+    _should_use_plain_chat_fallback,
+    build_interactive_turn_runner,
+)
 from anvil.services.team_service import parse_team_message, parse_teammate
 from anvil.session import SessionStore
 from anvil.skills import SkillLoader
@@ -55,6 +64,73 @@ class AgentCliTests(unittest.TestCase):
         self.assertIn('- files: Read, write, patch, and search files', prompt)
         self.assertNotIn('# Anvil Skills', prompt)
 
+    def test_should_instruct_coding_model_to_use_tools_for_file_operations(self) -> None:
+        captured = {}
+
+        def fake_invoke(prompt: str) -> str:
+            captured['prompt'] = prompt
+            return '{"thought":"done","plan":[],"tool_calls":[],"final":"done"}'
+
+        parser = build_parser()
+        args = parser.parse_args(['code', '--goal', 'x', '--provider', 'mock', '--model', 'mock-v3'])
+
+        with patch('anvil.agent_cli.build_invoke_from_args', return_value=fake_invoke):
+            decider = _build_coding_decider(args, None)
+            decider('create an empty markdown file', tuple(), tuple(), {}, tuple())
+
+        prompt = captured['prompt']
+        self.assertIn('do the work with tools', prompt)
+        self.assertIn('For creating an empty file, use write_file', prompt)
+        self.assertIn('Do not answer with shell commands', prompt)
+        self.assertIn('field types, not values to copy', prompt)
+        self.assertIn('- write_file:', prompt)
+        self.assertNotIn('"name":"read_file","arguments":{"path":"README.md"}', prompt)
+        self.assertNotIn('"name":"tool_name"', prompt)
+        self.assertNotIn('short private status', prompt)
+        self.assertNotIn('short next step', prompt)
+
+    def test_should_repair_prompt_after_invalid_agent_step_json(self) -> None:
+        prompt = build_coding_prompt(
+            goal='create an empty json file',
+            history=('invalid agent step json. expected schema: {}',),
+            tool_results=tuple(),
+            state_summary={},
+            last_steps=tuple(),
+            history_window=8,
+        )
+
+        self.assertIn('previous response did not match', prompt)
+        self.assertIn('Return exactly one JSON object', prompt)
+        self.assertIn('Use write_file for empty files', prompt)
+
+    def test_should_repair_prompt_after_missing_tool_calls_for_file_action(self) -> None:
+        prompt = build_coding_prompt(
+            goal='create an empty json file',
+            history=tuple(),
+            tool_results=tuple(),
+            state_summary={'workspace': {'root': 'D:\\workspace\\Anvil'}},
+            last_steps=('tool action required: file operation requests must be completed with tool calls',),
+            history_window=8,
+        )
+
+        self.assertIn('tool_calls was empty for a file operation', prompt)
+        self.assertIn('at least one tool call', prompt)
+        self.assertIn('Do not set final until a tool result confirms', prompt)
+
+    def test_should_prompt_for_final_after_successful_tool_result(self) -> None:
+        prompt = build_coding_prompt(
+            goal='create an empty json file',
+            history=tuple(),
+            tool_results=(ToolResult(id='call_1', ok=True, output='ok'),),
+            state_summary={'workspace': {'root': 'D:\\workspace\\Anvil'}},
+            last_steps=('continue',),
+            history_window=8,
+        )
+
+        self.assertIn('previous tool call succeeded', prompt)
+        self.assertIn('do not call more tools', prompt)
+        self.assertIn('return final', prompt)
+
     def test_should_describe_tool_use_loop_in_root_help(self) -> None:
         parser = build_parser()
         help_text = parser.format_help()
@@ -66,10 +142,92 @@ class AgentCliTests(unittest.TestCase):
         self.assertFalse(_should_launch_interactive(['tools']))
         self.assertFalse(_should_launch_interactive(['code', '--goal', 'x']))
 
+    def test_should_extract_interactive_output_from_fallback_fields(self) -> None:
+        self.assertEqual(_extract_interactive_output({'final_output': 'done'}), 'done')
+        self.assertEqual(_extract_interactive_output({'history': ['', 'last visible']}), 'last visible')
+        self.assertEqual(_extract_interactive_output({'error': 'bad json'}), 'Run failed: bad json')
+        self.assertEqual(
+            _extract_interactive_output({'stop_reason': 'max_steps'}),
+            'Stopped without final output (reason: max_steps).',
+        )
+
+    def test_should_use_plain_chat_fallback_for_provider_format_errors(self) -> None:
+        self.assertTrue(_should_use_plain_chat_fallback('Stopped without final output (reason: max_steps).'))
+        self.assertTrue(_should_use_plain_chat_fallback('invalid agent step json. expected schema: {}'))
+        self.assertTrue(_should_use_plain_chat_fallback('Run failed: invalid Anthropic response format'))
+        self.assertFalse(_should_use_plain_chat_fallback('done'))
+
+    def test_should_detect_action_requests_that_must_not_plain_chat_fallback(self) -> None:
+        self.assertTrue(_looks_like_action_request('在D:\\workspace新增一个abc，并在abc新建一个.md文件'))
+        self.assertTrue(_looks_like_action_request('create a file at notes/todo.md'))
+        self.assertFalse(_looks_like_action_request('你是谁'))
+
+    def test_should_format_chat_history_without_current_user_message(self) -> None:
+        history = _format_chat_history(
+            [
+                'user: 你是谁',
+                'assistant: 我是 Anvil',
+                'user: 把对话内容写到txt中',
+                'assistant: 1. 保存目前的对话\n2. 继续对话后再保存',
+                'user: 1',
+            ],
+            current_user_text='1',
+        )
+        self.assertIn('assistant: 1. 保存目前的对话', history)
+        self.assertNotIn('\nuser: 1', history)
+
     def test_should_list_tools_subcommand(self) -> None:
         parser = build_parser()
         args = parser.parse_args(['tools'])
         self.assertEqual(args.command, 'tools')
+
+    def test_interactive_turn_runner_marks_trusted_workspace(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(['code', '--goal', 'x', '--provider', 'mock', '--model', 'mock-v3'])
+        captured = {}
+
+        class FakeRuntime:
+            def __init__(self, runtime_args, *, goal: str) -> None:
+                captured['trusted'] = getattr(runtime_args, 'interactive_trusted_workspace', False)
+                captured['goal'] = goal
+                self.goal = goal
+                self.workspace_root = Path('.')
+                self.observer = None
+                self.session_store = SessionStore.create(
+                    root_dir=Path('tests/.tmp') / f'interactive-{uuid.uuid4().hex}' / 'sessions',
+                    workspace_root=Path('.'),
+                    goal=goal,
+                    memory_run_dir=Path('tests/.tmp') / 'runs',
+                )
+                self.task_store = None
+                self.compression_config = None
+                self.transcripts_dir = None
+
+            def build_context_provider(self):
+                return None
+
+            def build_policy(self):
+                return None
+
+            def finalize(self, result):
+                return {'final_output': 'done'}
+
+        with patch('anvil.services.session_runtime.CodeRuntime', FakeRuntime):
+            with patch('anvil.services.session_runtime.load_skills_from_args', return_value=None):
+                with patch('anvil.services.session_runtime.build_coding_decider', return_value=lambda *args: ''):
+                    with patch('anvil.services.session_runtime.build_coding_summarizer', return_value=None):
+                        with patch('anvil.services.session_runtime.run_coding_agent') as run_agent:
+                            run_agent.return_value = type(
+                                'Result',
+                                (),
+                                {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
+                            )()
+                            runner = build_interactive_turn_runner(args, session_id='s1')
+                            output = runner('create file')
+
+        self.assertEqual(output, 'done')
+        self.assertEqual(captured['trusted'], True)
+        self.assertEqual(captured['goal'], 'create file')
 
     def test_should_parse_help_and_resume_slash_commands(self) -> None:
         self.assertEqual(parse_slash_command('/help').name, 'help')

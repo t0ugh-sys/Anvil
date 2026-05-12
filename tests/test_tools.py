@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import unittest
 import uuid
 from pathlib import Path
@@ -176,7 +177,7 @@ class ToolsTests(unittest.TestCase):
         try:
             result = run_command_tool(
                 ToolContext(workspace_root=tmp_dir),
-                {'cmd': ['echo', 'hello'], 'id': 'test_1'}
+                {'cmd': [sys.executable, '-c', "print('hello')"], 'id': 'test_1'}
             )
             self.assertTrue(result.ok)
             self.assertIn('hello', result.output)

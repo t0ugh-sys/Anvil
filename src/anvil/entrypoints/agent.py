@@ -8,6 +8,8 @@ from ..utils import default_run_id
 
 
 def main(argv: list[str] | None = None) -> None:
+    if hasattr(sys.stdin, 'reconfigure'):
+        sys.stdin.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
     if hasattr(sys.stderr, 'reconfigure'):

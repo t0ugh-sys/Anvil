@@ -28,16 +28,60 @@ def build_coding_prompt(
     if skills is not None:
         for item in skills.metadata():
             skill_lines.append(f'- {item["name"]}: {item["description"]}')
+    recent_history = list(history[-history_window:])
+    format_repair = ''
+    if any('invalid agent step json' in item for item in recent_history):
+        format_repair = (
+            'Your previous response did not match the required agent-step JSON schema. '
+            'Retry the same user goal now. Return exactly one JSON object, with no markdown, '
+            'no prose, and no text before or after the JSON. Use write_file for empty files; '
+            'write_file creates parent directories when needed.\n'
+        )
+    tool_repair = ''
+    if any('tool action required' in item for item in last_steps):
+        tool_repair = (
+            'Your previous response was rejected because tool_calls was empty for a file operation. '
+            'Retry the same user goal now with at least one tool call that performs the requested work. '
+            'For a directory plus file request, call write_file on the target file path; it creates parent directories. '
+            'Do not set final until a tool result confirms the work succeeded.\n'
+        )
+    completion_repair = ''
+    if any(getattr(item, 'ok', False) for item in tool_results):
+        completion_repair = (
+            'At least one previous tool call succeeded. If the user goal is now satisfied, do not call more tools; '
+            'return final with a concise completion message.\n'
+        )
+    tool_guide = (
+        'Available tool call names and common arguments:\n'
+        '- read_file: {"path":"relative/path"}\n'
+        '- write_file: {"path":"relative/path","content":"text"}; creates parent directories inside the workspace.\n'
+        '- apply_patch: {"patch":"*** Begin Patch\\n...\\n*** End Patch"}\n'
+        '- search: {"pattern":"literal text"}\n'
+        '- run_command: {"cmd":["program","arg"]}\n'
+        'For a requested empty JSON file, call write_file with a .json path and content "".\n'
+        'Use paths relative to the workspace unless the user supplies an absolute path inside the workspace.\n'
+        'If the user asks for the current path, use StateSummary.workspace.root.\n'
+        'The schema describes field types, not values to copy. '
+        'Never invent tool names. Use only the listed tool names, and choose tools that directly satisfy the user goal.\n'
+    )
     return (
         'You are a coding agent. Return strict JSON matching schema.\n'
-        'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
+        + format_repair
+        + tool_repair
+        + completion_repair
+        + 'Use tools when needed. Keep a visible todo list updated via the todo_write tool when progress changes.\n'
+        + 'When the user asks you to create, edit, write, delete, move, or inspect files, do the work with tools. '
+        + 'Do not answer with shell commands for the user to copy, and do not ask whether you should execute a clearly requested file operation. '
+        + 'For creating an empty file, use write_file with an empty content string. '
+        + 'For creating a directory and file together, write the target file path directly; write_file creates parent directories.\n'
+        + tool_guide
         + ('Available skills:\n' + '\n'.join(skill_lines) + '\n' if skill_lines else '')
         + 'Do not inline full skill instructions in the prompt. Load them on demand with load_skill.\n'
         + render_agent_step_schema()
         + '\nGoal:\n'
         + goal
         + '\nHistory:\n'
-        + str(list(history[-history_window:]))
+        + str(recent_history)
         + '\nStateSummary:\n'
         + json.dumps(state_summary, ensure_ascii=False)
         + '\nLastSteps:\n'

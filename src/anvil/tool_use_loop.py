@@ -73,6 +73,47 @@ def _decide_next_step(
     )
 
 
+def _looks_like_file_action(goal: str) -> bool:
+    normalized = goal.lower()
+    action_tokens = (
+        '\u65b0\u589e',
+        '\u521b\u5efa',
+        '\u65b0\u5efa',
+        '\u5199\u5165',
+        '\u5199\u5230',
+        '\u4fee\u6539',
+        '\u5220\u9664',
+        'create',
+        'write',
+        'edit',
+        'delete',
+    )
+    target_tokens = (
+        '\u6587\u4ef6',
+        '\u6587\u4ef6\u5939',
+        '\u76ee\u5f55',
+        '.txt',
+        '.md',
+        '.json',
+        'file',
+        'folder',
+        'directory',
+    )
+    return any(token in normalized for token in action_tokens) and any(
+        token in normalized for token in target_tokens
+    )
+
+
+def _has_successful_file_mutation(state: ToolUseState) -> bool:
+    mutating_tools = {'write_file', 'apply_patch', 'run_command'}
+    return any(
+        entry.kind == 'tool_result'
+        and entry.ok is True
+        and entry.tool_name in mutating_tools
+        for entry in state.transcript
+    )
+
+
 def _build_todo_state_summary(
     state: ToolUseState,
     *,
@@ -416,6 +457,7 @@ def execute_tool_use_round(
         compression_config=config,
         background_runner=background_runner,
     )
+    augmented_state_summary.setdefault('workspace', {'root': str(tool_context.workspace_root)})
     todo_manager = TodoManager(
         TodoSnapshot(
             items=effective_state.todos,
@@ -487,6 +529,7 @@ def execute_tool_use_round(
         tool_calls=parsed.tool_calls,
         tool_results=executed,
     )
+    metadata['raw_response'] = raw[:2000]
     metadata['todo_state'] = _build_todo_state_summary(new_state, nag_after_rounds=nag_after_rounds)
     metadata['compression_state'] = {
         'summary': new_state.compact_summary,
@@ -503,6 +546,22 @@ def execute_tool_use_round(
         item.to_dict() for item in background_runner.snapshot()
     ] if background_runner is not None else []
     if not metadata['has_tool_calls']:
+        previous_failed_tools = [item for item in effective_state.tool_results if not item.ok]
+        if previous_failed_tools:
+            last_error = previous_failed_tools[-1].error or 'tool failed'
+            return StepResult(
+                output=f'tool action failed: {last_error}',
+                state=new_state,
+                done=False,
+                metadata={**metadata, 'unresolved_tool_error': True},
+            )
+        if _looks_like_file_action(effective_context.goal) and not _has_successful_file_mutation(effective_state):
+            return StepResult(
+                output='tool action required: file operation requests must be completed with tool calls',
+                state=new_state,
+                done=False,
+                metadata={**metadata, 'missing_tool_calls': True},
+            )
         final = parsed.final or parsed.thought or 'done'
         return StepResult(output=final, state=new_state, done=True, metadata=metadata)
     return StepResult(output='continue', state=new_state, done=False, metadata=metadata)

@@ -85,7 +85,7 @@ Respond with JSON:
 {
   "thought": "your reasoning",
   "plan": ["action 1", "action 2"],
-  "tool_calls": [{"id": "call_1", "name": "tool_name", "arguments": {"arg": "value"}}],
+  "tool_calls": [],
   "final": null or "final answer"
 }""",
     required_vars=["goal", "state_summary", "last_steps"],

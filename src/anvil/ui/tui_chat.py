@@ -276,6 +276,8 @@ def run(argv: Optional[list[str]] = None) -> int:
                 'gpt-4.1-mini',
                 'gpt-4.1',
                 'o3-mini',
+                'mimo-v2.5-pro',
+                'mimo-v2-pro',
             ]
         if provider == 'anthropic':
             return [
@@ -322,6 +324,8 @@ def run(argv: Optional[list[str]] = None) -> int:
             self.dismiss(None)
 
     class ChatApp(App):
+        TITLE = 'Anvil'
+        COMMAND_PALETTE = False
         CSS = """
         Screen {
             layout: vertical;
@@ -390,7 +394,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                 new_cfg, new_invoke, banner = _apply_provider_change(value)
             except Exception as e:
                 log = self.query_one('#log', Static)
-                existing = str(log.renderable)
+                existing = (getattr(log, 'renderable', None) or '')
                 log.update(existing + f'ERROR: {e}\n')
                 return
 
@@ -398,7 +402,7 @@ def run(argv: Optional[list[str]] = None) -> int:
             current_invoke = new_invoke
 
             log = self.query_one('#log', Static)
-            existing = str(log.renderable)
+            existing = (getattr(log, 'renderable', None) or '')
             log.update(existing + f'\n[{banner}]\n')
 
         def _on_model_picked(self, value: Optional[str]) -> None:
@@ -412,7 +416,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                 new_invoke = _build_chat_invoke(new_cfg)
             except Exception as e:
                 log = self.query_one('#log', Static)
-                existing = str(log.renderable)
+                existing = (getattr(log, 'renderable', None) or '')
                 log.update(existing + f'ERROR: {e}\n')
                 return
 
@@ -420,7 +424,7 @@ def run(argv: Optional[list[str]] = None) -> int:
             current_invoke = new_invoke
 
             log = self.query_one('#log', Static)
-            existing = str(log.renderable)
+            existing = (getattr(log, 'renderable', None) or '')
             log.update(existing + f'\n[{banner}]\n')
 
         def on_ready(self) -> None:
@@ -459,7 +463,7 @@ def run(argv: Optional[list[str]] = None) -> int:
 
             if text == '/status':
                 log = self.query_one('#log', Static)
-                existing = str(log.renderable)
+                existing = (getattr(log, 'renderable', None) or '')
                 log.update(existing + f'\n[{_cfg_banner(current_cfg)}]\n')
                 return
 
@@ -474,7 +478,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                     new_invoke = _build_chat_invoke(new_cfg)
                 except Exception as e:
                     log = self.query_one('#log', Static)
-                    existing = str(log.renderable)
+                    existing = (getattr(log, 'renderable', None) or '')
                     log.update(existing + f'ERROR: {e}\n')
                     return
 
@@ -482,7 +486,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                 current_invoke = new_invoke
 
                 log = self.query_one('#log', Static)
-                existing = str(log.renderable)
+                existing = (getattr(log, 'renderable', None) or '')
                 log.update(existing + f'\n[{banner}]\n')
                 return
 
@@ -496,7 +500,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                     new_cfg, new_invoke, banner = _apply_provider_change(parts[1])
                 except Exception as e:
                     log = self.query_one('#log', Static)
-                    existing = str(log.renderable)
+                    existing = (getattr(log, 'renderable', None) or '')
                     log.update(existing + f'ERROR: {e}\n')
                     return
 
@@ -504,12 +508,12 @@ def run(argv: Optional[list[str]] = None) -> int:
                 current_invoke = new_invoke
 
                 log = self.query_one('#log', Static)
-                existing = str(log.renderable)
+                existing = (getattr(log, 'renderable', None) or '')
                 log.update(existing + f'\n[{banner}]\n')
                 return
 
             log = self.query_one('#log', Static)
-            existing = str(log.renderable)
+            existing = (getattr(log, 'renderable', None) or '')
             log.update(existing + f'\n> {text}\n')
 
             _append_jsonl(messages_path, {'role': 'user', 'text': text, 'ts': datetime.now(timezone.utc).isoformat()})
@@ -525,7 +529,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                 {'role': 'assistant', 'text': reply, 'ts': datetime.now(timezone.utc).isoformat()},
             )
             log = self.query_one('#log', Static)
-            existing = str(log.renderable)
+            existing = (getattr(log, 'renderable', None) or '')
             log.update(existing + reply + '\n')
 
     ChatApp().run()
