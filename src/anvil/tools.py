@@ -17,7 +17,7 @@ from .compression import CompactManager
 from .permissions import PermissionMode
 from .policies import ToolPolicy
 from .policies import TOOL_CAPABILITIES
-from .tool_spec import ToolRisk, ToolSpec
+from .tool_spec import ToolDef, ToolRisk, ToolSpec, ValidationResult, build_tool
 from .todo import TodoManager, render_todo_lines
 
 if TYPE_CHECKING:
@@ -27,6 +27,18 @@ if TYPE_CHECKING:
 MAX_FETCH_URL_CHARS = 5000
 MAX_SEARCH_SNIPPET_CHARS = 200
 MAX_WEB_RESULT_TITLE_CHARS = 120
+
+
+def require_params(*names: str) -> Callable[[Dict[str, object]], ValidationResult]:
+    """Create a validator that checks for required parameters."""
+    def validate(args: Dict[str, object]) -> ValidationResult:
+        missing = [n for n in names if not args.get(n)]
+        if missing:
+            return ValidationResult.failure(
+                *(f'required parameter `{n}` is missing' for n in missing)
+            )
+        return ValidationResult.success()
+    return validate
 
 
 @dataclass(frozen=True)
@@ -42,6 +54,9 @@ class ToolContext:
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]
 ToolDispatchMap = Dict[str, ToolFn]
 ToolRegistration = Tuple[str, ToolFn]
+
+# Registry of full tool definitions (for validation, metadata)
+_tool_defs: Dict[str, ToolDef] = {}
 
 
 _SEARCH_SKIP_DIRS = {
@@ -632,6 +647,16 @@ def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolD
     return dispatch_map
 
 
+def register_tool_def(tool_def: ToolDef) -> None:
+    """Register a full tool definition for validation and metadata."""
+    _tool_defs[tool_def.name] = tool_def
+
+
+def get_tool_def(name: str) -> ToolDef | None:
+    """Get the full tool definition for a tool by name."""
+    return _tool_defs.get(name)
+
+
 def _builtin_core_tool_registrations() -> List[ToolRegistration]:
     return [
         ('load_skill', load_skill_tool),
@@ -724,6 +749,20 @@ def execute_tool_call(context: ToolContext, tool_call: ToolCall, tools: ToolDisp
     tool = tools.get(tool_call.name)
     if tool is None:
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')
+
+    # Phase 1: Validate input (if tool def has validator)
+    tool_def = _tool_defs.get(tool_call.name)
+    if tool_def and tool_def.validate_input:
+        validation = tool_def.validate_input(tool_call.arguments)
+        if not validation.ok:
+            return ToolResult(
+                id=tool_call.id,
+                ok=False,
+                output='',
+                error=validation.to_error_string(tool_call.name),
+            )
+
+    # Phase 2: Check permissions
     if not context.policy.allows_tool(tool_call.name):
         denied = ', '.join(item.value for item in context.policy.denied_capabilities_for_tool(tool_call.name))
         return ToolResult(
