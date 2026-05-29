@@ -20,13 +20,29 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .chrome import (
+    ARROW_RIGHT,
+    BLOCK_LOWER,
+    BULLET,
+    CHECK_MARK,
+    CIRCLE_FILLED,
+    CIRCLE_EMPTY,
+    CROSS_MARK,
+    DIAMOND,
     DOT_SEPARATOR,
+    DOUBLE_HORIZONTAL,
+    DOUBLE_VERTICAL,
+    GEAR,
+    LIGHT_SHADE,
+    LIGHTNING,
     PROMPT_MARKER,
     RESPONSE_MARKER,
+    SPARKLE,
     WORKING_MARKER,
     bounded_width,
     box_lines,
     response_lines,
+    separator_line,
+    status_bar,
     truncate,
 )
 
@@ -88,11 +104,24 @@ THEME = Theme({
     'anvil.working': 'bold #7dd3fc',
     'anvil.response': 'bold #8ab4f8',
     'anvil.model': '#9aa4b2',
-    'anvil.error': 'bold red',
+    'anvil.error': 'bold #f85149',
     'anvil.dim': '#8b949e',
-    'anvil.user': 'bold',
+    'anvil.user': 'bold #e6edf3',
     'anvil.border': '#4f8f8f',
     'anvil.output': '#d7dde8',
+    'anvil.header': 'bold #7ee787',
+    'anvil.accent': '#58a6ff',
+    'anvil.success': 'bold #56d364',
+    'anvil.warning': 'bold #d29922',
+    'anvil.info': '#58a6ff',
+    'anvil.muted': '#6e7681',
+    'anvil.highlight': 'bold #ffa657',
+    'anvil.code': '#ff7b72',
+    'anvil.separator': '#30363d',
+    'anvil.status': '#484f58',
+    'anvil.token.bar': '#238636',
+    'anvil.token.warn': '#d29922',
+    'anvil.token.crit': '#f85149',
 })
 
 
@@ -237,44 +266,90 @@ def _status_line(cfg: ChatConfig, *, width: int) -> str:
 
 def _print_welcome(console: Console, cfg: ChatConfig, *, chat_dir: Path) -> None:
     width = _ui_width(console)
-    lines = [
-        f'{WORKING_MARKER} Welcome to Anvil',
-        '',
-        f'cwd: {Path.cwd()}',
-        f'chat: {chat_dir.name}',
-        f'logs: {chat_dir}',
-        f'model: {cfg.model}',
-        f'provider: {PROVIDER_LABELS.get(cfg.provider, cfg.provider)}',
+
+    # Header banner
+    banner = Text()
+    banner.append(f'  {SPARKLE} ', style='anvil.header')
+    banner.append('ANVIL', style='bold #58a6ff')
+    console.print(banner)
+    console.print(f'  {separator_line(width - 4, char=DOUBLE_HORIZONTAL)}', style='anvil.separator')
+
+    # Info grid
+    items = [
+        (f'{CIRCLE_FILLED}', 'cwd', str(Path.cwd())),
+        (FOLDER, 'chat', chat_dir.name),
+        (LIGHTNING, 'model', cfg.model),
+        (GEAR, 'provider', PROVIDER_LABELS.get(cfg.provider, cfg.provider)),
     ]
-    welcome_lines = box_lines(lines, width=width, title='Anvil')
-    for index, line in enumerate(welcome_lines):
-        style = 'anvil.border' if index in {0, len(welcome_lines) - 1} else 'anvil.dim'
-        console.print(line, style=style, markup=False)
-    hint = f'  ? for shortcuts {DOT_SEPARATOR} /help {DOT_SEPARATOR} /status {DOT_SEPARATOR} /model {DOT_SEPARATOR} /exit'
-    console.print(truncate(hint, width), style='anvil.dim', markup=False)
-    console.print(_status_line(cfg, width=width), style='anvil.model', markup=False)
+    for icon, label, value in items:
+        t = Text()
+        t.append(f'  {icon} ', style='anvil.accent')
+        t.append(f'{label}: ', style='anvil.muted')
+        t.append(str(value), style='anvil.output')
+        console.print(t)
+
+    console.print(f'  {separator_line(width - 4, char=DOUBLE_HORIZONTAL)}', style='anvil.separator')
+
+    # Hints
+    hint = Text()
+    hint.append('  ', style='dim')
+    hint.append('? ', style='anvil.highlight')
+    hint.append('shortcuts', style='anvil.muted')
+    hint.append(f' {DOT_SEPARATOR} ', style='anvil.separator')
+    hint.append('/help', style='anvil.accent')
+    hint.append(f' {DOT_SEPARATOR} ', style='anvil.separator')
+    hint.append('/status', style='anvil.accent')
+    hint.append(f' {DOT_SEPARATOR} ', style='anvil.separator')
+    hint.append('/model', style='anvil.accent')
+    hint.append(f' {DOT_SEPARATOR} ', style='anvil.separator')
+    hint.append('/exit', style='anvil.accent')
+    console.print(hint)
+
+    # Status bar
+    sb = status_bar(cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()), width=width)
+    console.print(sb, style='anvil.status', markup=False)
     console.print()
 
 
 def _print_prompt(console: Console) -> None:
-    console.print(PROMPT_MARKER, style='anvil.prompt', end=' ')
+    t = Text()
+    t.append(f'{PROMPT_MARKER} ', style='anvil.prompt')
+    console.print(t, end='')
 
 
 def _print_help(console: Console, cfg: ChatConfig) -> None:
-    console.print('Commands:', style='anvil.dim')
-    console.print('  ?                  Show this help', style='anvil.output')
-    console.print('  /model [name]      Switch or list models', style='anvil.output')
-    console.print('  /provider [name]   Switch or list providers', style='anvil.output')
-    console.print('  /status            Show config', style='anvil.output')
-    console.print('  /history           Recent messages', style='anvil.output')
-    console.print('  /reset             Clear history', style='anvil.output')
-    console.print('  /exit              Quit', style='anvil.output')
+    width = _ui_width(console)
+    console.print()
+    t = Text()
+    t.append(f'  {GEAR} ', style='anvil.accent')
+    t.append('Commands', style='bold anvil.accent')
+    console.print(t)
+    console.print(f'  {separator_line(width - 4, char=DOUBLE_HORIZONTAL)}', style='anvil.separator')
+
+    cmds = [
+        ('?', 'Show shortcuts'),
+        ('/help', 'Show this help'),
+        ('/model [name]', 'Switch or list models'),
+        ('/provider [name]', 'Switch or list providers'),
+        ('/status', 'Show configuration'),
+        ('/history', 'Recent messages'),
+        ('/reset', 'Clear conversation history'),
+        ('/exit', 'Quit Anvil'),
+    ]
+    for cmd, desc in cmds:
+        t = Text()
+        t.append(f'  {BULLET} ', style='anvil.separator')
+        t.append(f'{cmd:<18}', style='anvil.highlight')
+        t.append(desc, style='anvil.muted')
+        console.print(t)
+
     console.print()
     _print_footer(console, cfg)
 
 
 def _print_response(console: Console, text: str, cfg: ChatConfig) -> None:
     width = _ui_width(console)
+    console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
     for line in response_lines(text, width=width):
         if line.lstrip().startswith(RESPONSE_MARKER):
             prefix, _, rest = line.partition(RESPONSE_MARKER)
@@ -284,7 +359,9 @@ def _print_response(console: Console, text: str, cfg: ChatConfig) -> None:
             console.print(rendered)
         else:
             console.print(line, style='anvil.output', markup=False)
-    console.print(_status_line(cfg, width=width), style='anvil.model', markup=False)
+    console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
+    sb = status_bar(cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()), width=width)
+    console.print(sb, style='anvil.status', markup=False)
     console.print()
 
 
@@ -396,11 +473,25 @@ def run(argv: Optional[list[str]] = None) -> int:
                 continue
 
             if cmd == '/status':
-                console.print(f'  provider: {PROVIDER_LABELS.get(cfg.provider, cfg.provider)}', style='anvil.output')
-                console.print(f'  model:    {cfg.model}', style='anvil.output')
-                console.print(f'  base_url: {cfg.base_url or "(n/a)"}', style='anvil.output')
-                console.print(f'  api_key:  {cfg.api_key_env}', style='anvil.output')
-                console.print(f'  temp:     {cfg.temperature}', style='anvil.output')
+                width = _ui_width(console)
+                console.print()
+                t = Text()
+                t.append(f'  {GEAR} ', style='anvil.accent')
+                t.append('Configuration', style='bold anvil.accent')
+                console.print(t)
+                console.print(f'  {separator_line(width - 4, char=DOUBLE_HORIZONTAL)}', style='anvil.separator')
+                for label, value in [
+                    ('provider', PROVIDER_LABELS.get(cfg.provider, cfg.provider)),
+                    ('model', cfg.model),
+                    ('base_url', cfg.base_url or '(n/a)'),
+                    ('api_key', cfg.api_key_env),
+                    ('temperature', str(cfg.temperature)),
+                ]:
+                    t = Text()
+                    t.append(f'  {BULLET} ', style='anvil.separator')
+                    t.append(f'{label:<12}', style='anvil.muted')
+                    t.append(str(value), style='anvil.output')
+                    console.print(t)
                 console.print()
                 _print_footer(console, cfg)
                 continue
@@ -408,9 +499,21 @@ def run(argv: Optional[list[str]] = None) -> int:
             if cmd == '/model':
                 if not arg:
                     candidates = _model_candidates(cfg.provider)
+                    console.print()
+                    t = Text()
+                    t.append(f'  {LIGHTNING} ', style='anvil.accent')
+                    t.append(f'Models ({PROVIDER_LABELS.get(cfg.provider, cfg.provider)})', style='bold anvil.accent')
+                    console.print(t)
                     for m in candidates:
-                        marker = ' *' if m == cfg.model else ''
-                        console.print(f'  {m}{marker}', style='anvil.output')
+                        t = Text()
+                        if m == cfg.model:
+                            t.append(f'  {CIRCLE_FILLED} ', style='anvil.success')
+                            t.append(m, style='bold anvil.output')
+                            t.append(' (active)', style='anvil.success')
+                        else:
+                            t.append(f'  {CIRCLE_EMPTY} ', style='anvil.muted')
+                            t.append(m, style='anvil.muted')
+                        console.print(t)
                     console.print()
                     _print_footer(console, cfg)
                     continue
@@ -426,10 +529,24 @@ def run(argv: Optional[list[str]] = None) -> int:
 
             if cmd == '/provider':
                 if not arg:
+                    console.print()
+                    t = Text()
+                    t.append(f'  {GEAR} ', style='anvil.accent')
+                    t.append('Providers', style='bold anvil.accent')
+                    console.print(t)
                     for p in PROVIDERS:
                         label = PROVIDER_LABELS.get(p, p)
-                        marker = ' *' if p == cfg.provider else ''
-                        console.print(f'  {p} ({label}){marker}', style='anvil.output')
+                        t = Text()
+                        if p == cfg.provider:
+                            t.append(f'  {CIRCLE_FILLED} ', style='anvil.success')
+                            t.append(f'{p} ', style='bold anvil.output')
+                            t.append(f'({label})', style='anvil.success')
+                            t.append(' (active)', style='anvil.success')
+                        else:
+                            t.append(f'  {CIRCLE_EMPTY} ', style='anvil.muted')
+                            t.append(f'{p} ', style='anvil.muted')
+                            t.append(f'({label})', style='anvil.muted')
+                        console.print(t)
                     console.print()
                     _print_footer(console, cfg)
                     continue
@@ -449,21 +566,38 @@ def run(argv: Optional[list[str]] = None) -> int:
                         messages_path.read_text(encoding='utf-8'), encoding='utf-8'
                     )
                     messages_path.unlink()
-                console.print('History cleared', style='anvil.dim')
+                t = Text()
+                t.append(f'  {CHECK_MARK} ', style='anvil.success')
+                t.append('History cleared', style='anvil.muted')
+                t.append(f' {DOT_SEPARATOR} backup saved', style='anvil.dim')
+                console.print(t)
                 console.print()
                 continue
 
             if cmd == '/history':
                 msgs = _load_messages(messages_path, 10)
                 if not msgs:
-                    console.print('No messages yet', style='anvil.dim')
+                    t = Text()
+                    t.append(f'  {CIRCLE_EMPTY} ', style='anvil.muted')
+                    t.append('No messages yet', style='anvil.muted')
+                    console.print(t)
                     console.print()
                     continue
+                console.print()
+                t = Text()
+                t.append(f'  {FOLDER} ', style='anvil.accent')
+                t.append('Recent Messages', style='bold anvil.accent')
+                console.print(t)
+                console.print(f'  {separator_line(_ui_width(console) - 4)}', style='anvil.separator')
                 for msg in msgs:
                     if msg['role'] == 'user':
-                        console.print(f'> {msg["content"]}', style='anvil.prompt')
+                        t = Text()
+                        t.append(f'  {ARROW_RIGHT} ', style='anvil.prompt')
+                        t.append(msg['content'], style='anvil.user')
+                        console.print(t)
                     else:
-                        _safe_print(console, msg['content'])
+                        console.print(f'    ', end='')
+                        _safe_print_markdown(console, msg['content'])
                 console.print()
                 continue
 

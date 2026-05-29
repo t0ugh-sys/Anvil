@@ -82,6 +82,7 @@ class CompactConfig:
 
 
 # Backward compatibility aliases (must be after definitions)
+# DEPRECATED: use CompactConfig directly
 CompressionConfig = CompactConfig
 
 # Legacy alias - create minimal TranscriptEntry class
@@ -163,11 +164,17 @@ _CJK_RANGES = (
     (0xAC00, 0xD7AF),    # Hangul Syllables
 )
 
+# Pre-built range objects for O(1) containment checks
+_CJK_RANGE_SET = tuple(range(start, end + 1) for start, end in _CJK_RANGES)
+
 
 def _is_cjk(char: str) -> bool:
-    """Check if a character is CJK (Chinese/Japanese/Korean)."""
+    """Check if a character is CJK (Chinese/Japanese/Korean).
+
+    Uses pre-built range objects for efficient O(1) lookup via ``in``.
+    """
     code = ord(char)
-    return any(start <= code <= end for start, end in _CJK_RANGES)
+    return any(code in r for r in _CJK_RANGE_SET)
 
 
 def estimate_tokens(parts: Iterable[str]) -> int:

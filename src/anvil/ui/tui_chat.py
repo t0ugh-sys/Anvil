@@ -329,15 +329,34 @@ def run(argv: Optional[list[str]] = None) -> int:
         CSS = """
         Screen {
             layout: vertical;
+            background: $surface;
         }
         #log {
             height: 1fr;
             overflow-y: auto;
-            border: round $surface;
-            padding: 1;
+            border: heavy $accent;
+            padding: 1 2;
+            background: $surface;
+            scrollbar-background: $surface;
+            scrollbar-color: $accent;
+            scrollbar-color-hover: $warning;
         }
         #input {
-            border: round $surface;
+            border: heavy $accent;
+            padding: 0 1;
+            background: $surface;
+        }
+        #input:focus {
+            border: heavy $success;
+        }
+
+        Header {
+            background: $primary-background;
+            color: $text;
+            text-style: bold;
+        }
+        Footer {
+            background: $primary-background;
         }
 
         ModelPickerScreen {
@@ -348,17 +367,50 @@ def run(argv: Optional[list[str]] = None) -> int:
             max-width: 100;
             height: auto;
             max-height: 80%;
-            border: round $surface;
+            border: heavy $accent;
             background: $panel;
-            padding: 1;
+            padding: 1 2;
         }
         ModelPickerScreen #title {
             padding: 0 0 1 0;
+            text-style: bold;
+            color: $accent;
         }
         ModelPickerScreen #options {
             height: auto;
             max-height: 20;
-            border: round $surface;
+            border: round $accent;
+        }
+        ModelPickerScreen #hint {
+            padding: 1 0 0 0;
+            color: $text-muted;
+        }
+
+        ProviderPickerScreen {
+            align: center middle;
+        }
+        ProviderPickerScreen > #panel {
+            width: 80%;
+            max-width: 100;
+            height: auto;
+            max-height: 80%;
+            border: heavy $accent;
+            background: $panel;
+            padding: 1 2;
+        }
+        ProviderPickerScreen #title {
+            padding: 0 0 1 0;
+            text-style: bold;
+            color: $accent;
+        }
+        ProviderPickerScreen #options {
+            height: auto;
+            max-height: 20;
+            border: round $accent;
+        }
+        ProviderPickerScreen #hint {
+            padding: 1 0 0 0;
+            color: $text-muted;
         }
         """
 
