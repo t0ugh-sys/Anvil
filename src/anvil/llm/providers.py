@@ -25,6 +25,31 @@ class ProviderHttpError(Exception):
         self.body = body
 
 
+def _http_post_json(
+    endpoint: str,
+    payload: dict,
+    headers: dict,
+    timeout_s: float,
+) -> dict:
+    """Shared HTTP POST helper with error handling.
+
+    Extracted to eliminate 4x duplicated request boilerplate across providers.
+    """
+    body = json.dumps(payload).encode('utf-8')
+    request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read().decode('utf-8')
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        error_body = ''
+        try:
+            error_body = exc.read().decode('utf-8', errors='replace')
+        except Exception:
+            error_body = str(exc)
+        raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+
 def _request_with_retry(
     request_fn: Callable[[], dict],
     max_retries: int,
@@ -48,6 +73,16 @@ def _request_with_retry(
         raise ProviderHttpError(status_code=status, body=body) from exc
 
 
+def _format_provider_error(provider: str, exc: ProviderHttpError, debug: bool) -> str:
+    """Format a consistent error message for provider HTTP errors.
+
+    Fixes #52: debug parameter now works for ALL providers.
+    """
+    if debug:
+        return f'{provider} API error: HTTP {exc.status_code} - {exc.body[:200]}'
+    return f'{provider} API error: HTTP {exc.status_code} (enable --provider-debug for details)'
+
+
 def _anthropic_invoke_factory(
     *,
     api_key: str,
@@ -58,6 +93,7 @@ def _anthropic_invoke_factory(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
     base_url: str = '',
+    debug: bool = False,
     enable_native_tools: bool = False,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
@@ -87,19 +123,7 @@ def _anthropic_invoke_factory(
                 payload['tool_choice'] = {'type': 'tool', 'name': 'write_file'}
             else:
                 payload['tool_choice'] = {'type': 'any'}
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -111,10 +135,7 @@ def _anthropic_invoke_factory(
             )
             return _extract_anthropic_text(response)
         except ProviderHttpError as exc:
-            error_msg = f'Anthropic API error: HTTP {exc.status_code}'
-            if exc.body:
-                error_msg += f' - {exc.body[:200]}'
-            raise ValueError(error_msg) from exc
+            raise ValueError(_format_provider_error('Anthropic', exc, debug)) from exc
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             detail = str(exc).strip()
             message = 'invalid Anthropic response format'
@@ -386,6 +407,7 @@ def _gemini_invoke_factory(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
     base_url: str = '',
+    debug: bool = False,
 ) -> InvokeFn:
     resolved_base = base_url.rstrip('/') if base_url else 'https://generativelanguage.googleapis.com/v1'
     endpoint = f'{resolved_base}/models/{model}:generateContent?key={api_key}'
@@ -399,19 +421,7 @@ def _gemini_invoke_factory(
             'contents': [{'parts': [{'text': prompt}]}],
             'generationConfig': {'temperature': temperature},
         }
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -430,10 +440,7 @@ def _gemini_invoke_factory(
                 raise ValueError('invalid Gemini response: no parts')
             return parts[0].get('text', '')
         except ProviderHttpError as exc:
-            error_msg = f'Gemini API error: HTTP {exc.status_code}'
-            if exc.body:
-                error_msg += f' - {exc.body[:200]}'
-            raise ValueError(error_msg) from exc
+            raise ValueError(_format_provider_error('Gemini', exc, debug)) from exc
         except (KeyError, IndexError) as exc:
             raise ValueError('invalid Gemini response format') from exc
 
@@ -455,7 +462,7 @@ def anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
-        enable_native_tools=enable_native_tools,
+        debug=debug, enable_native_tools=enable_native_tools,
     )
 
 
@@ -473,6 +480,7 @@ def gemini_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
+        debug=debug,
     )
 
 
@@ -506,7 +514,6 @@ def openai_compatible_chat_invoke_factory(
             'messages': messages,
             'temperature': temperature,
         }
-        body = json.dumps(payload).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -514,26 +521,16 @@ def openai_compatible_chat_invoke_factory(
             'Authorization': f'Bearer {api_key}',
         }
         headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(messages: List[Dict[str, str]]) -> str:
         last_error: Optional[ProviderHttpError] = None
 
         for current_model in models_to_try:
             try:
+                # Fix #45: bind current_model via default arg to avoid closure capture risk
                 data = _request_with_retry(
-                    request_fn=lambda: _request_once(messages, current_model),
+                    request_fn=lambda m=current_model: _request_once(messages, m),
                     max_retries=max_retries,
                     retry_backoff_s=retry_backoff_s,
                     retry_http_codes=retry_http_codes,
@@ -557,12 +554,8 @@ def openai_compatible_chat_invoke_factory(
             return content
 
         if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
-        raise ValueError('provider request failed without response')
+            raise ValueError(_format_provider_error('OpenAI', last_error, debug))
+        raise ValueError('no valid response from any model')
 
     return invoke
 
@@ -632,7 +625,6 @@ def _openai_compatible_invoke_factory(
                 'messages': [{'role': 'user', 'content': prompt}],
                 'temperature': temperature,
             }
-        body = json.dumps(payload).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -640,26 +632,16 @@ def _openai_compatible_invoke_factory(
             'Authorization': f'Bearer {api_key}',
         }
         headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         last_error: Optional[ProviderHttpError] = None
 
         for current_model in models_to_try:
             try:
+                # Fix #45: bind current_model via default arg to avoid closure capture risk
                 data = _request_with_retry(
-                    request_fn=lambda: _request_once(prompt, current_model),
+                    request_fn=lambda m=current_model: _request_once(prompt, m),
                     max_retries=max_retries,
                     retry_backoff_s=retry_backoff_s,
                     retry_http_codes=retry_http_codes,
@@ -707,11 +689,7 @@ def _openai_compatible_invoke_factory(
             return content
 
         if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
+            raise ValueError(_format_provider_error('OpenAI', last_error, debug))
         raise ValueError('provider request failed without response')
 
     return invoke
