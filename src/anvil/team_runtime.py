@@ -126,13 +126,17 @@ class TeamConfigStore:
 
     def load(self) -> TeamConfig:
         with self._lock:
-            if not self.config_file.exists():
-                return TeamConfig()
-            text = self.config_file.read_text(encoding='utf-8').strip()
-            if not text:
-                return TeamConfig()
-            payload = json.loads(text)
-            return TeamConfig.from_dict(payload if isinstance(payload, dict) else {})
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> TeamConfig:
+        """Load config without acquiring lock (caller must hold lock)."""
+        if not self.config_file.exists():
+            return TeamConfig()
+        text = self.config_file.read_text(encoding='utf-8').strip()
+        if not text:
+            return TeamConfig()
+        payload = json.loads(text)
+        return TeamConfig.from_dict(payload if isinstance(payload, dict) else {})
 
     def save(self, config: TeamConfig) -> None:
         with self._lock:
@@ -148,20 +152,22 @@ class TeamConfigStore:
             return updated
 
     def update_member_status(self, name: str, status: str) -> TeamConfig:
-        config = self.load()
-        members = []
-        found = False
-        for member in config.members:
-            if member.name == name:
-                members.append(TeamMember(name=member.name, role=member.role, status=status, metadata=member.metadata))
-                found = True
-            else:
-                members.append(member)
-        if not found:
-            raise ValueError(f'unknown teammate: {name}')
-        updated = TeamConfig(team_name=config.team_name, members=tuple(members))
-        self.save(updated)
-        return updated
+        # Fix #54: Wrap entire read-modify-write in a single lock to prevent TOCTOU race
+        with self._lock:
+            config = self._load_unlocked()
+            members = []
+            found = False
+            for member in config.members:
+                if member.name == name:
+                    members.append(TeamMember(name=member.name, role=member.role, status=status, metadata=member.metadata))
+                    found = True
+                else:
+                    members.append(member)
+            if not found:
+                raise ValueError(f'unknown teammate: {name}')
+            updated = TeamConfig(team_name=config.team_name, members=tuple(members))
+            self._write_config(updated)
+            return updated
 
     def _write_config(self, config: TeamConfig) -> None:
         self.config_file.write_text(
@@ -409,59 +415,86 @@ class PersistentTeamRuntime:
         return next(iter(members.keys()), None)
 
     def _run_teammate_loop(self, spec: PersistentTeammateSpec, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            messages = self.inbox_store.drain(spec.name)
-            if not messages:
-                time.sleep(0.05)
-                continue
-            for message in messages:
-                if message.message_type == TeamMessageType.shutdown_request:
-                    self.config_store.update_member_status(spec.name, 'shutdown')
-                    if message.sender:
-                        self.inbox_store.send(
-                            TeamMessage(
-                                id=uuid.uuid4().hex,
-                                sender=spec.name,
-                                recipient=message.sender,
-                                message_type=TeamMessageType.shutdown_response,
-                                body='shutdown accepted',
-                                metadata={'approved': True},
-                            )
-                        )
-                    stop_event.set()
-                    break
-                if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+        try:
+            while not stop_event.is_set():
+                messages = self.inbox_store.drain(spec.name)
+                if not messages:
+                    stop_event.wait(timeout=0.05)  # Fix: use wait instead of sleep for efficient blocking
                     continue
-                self.config_store.update_member_status(spec.name, 'working')
-                result = run_coding_agent(
-                    goal=message.body,
-                    decider=spec.decider,
-                    workspace_root=spec.workspace_root,
-                    stop=spec.stop,
-                    policy=spec.policy,
-                    skills=_load_skills(spec.skills),
-                )
-                task_id = str(message.metadata.get('task_id', '')).strip()
-                if task_id:
-                    self._complete_task(task_id, spec.name, result.done, result)
-                self.inbox_store.send(
-                    TeamMessage(
-                        id=uuid.uuid4().hex,
-                        sender=spec.name,
-                        recipient=message.sender or 'lead',
-                        message_type=TeamMessageType.message,
-                        body=result.final_output,
-                        metadata={
-                            'source_message_id': message.id,
-                            'task_id': task_id,
-                            'done': result.done,
-                            'stop_reason': result.stop_reason.value,
-                            'payload': run_result_to_dict(result, include_history=True),
-                        },
+                for message in messages:
+                    if message.message_type == TeamMessageType.shutdown_request:
+                        self.config_store.update_member_status(spec.name, 'shutdown')
+                        if message.sender:
+                            self.inbox_store.send(
+                                TeamMessage(
+                                    id=uuid.uuid4().hex,
+                                    sender=spec.name,
+                                    recipient=message.sender,
+                                    message_type=TeamMessageType.shutdown_response,
+                                    body='shutdown accepted',
+                                    metadata={'approved': True},
+                                )
+                            )
+                        stop_event.set()
+                        return  # Exit cleanly on shutdown
+                    if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+                        continue
+                    self.config_store.update_member_status(spec.name, 'working')
+                    try:
+                        result = run_coding_agent(
+                            goal=message.body,
+                            decider=spec.decider,
+                            workspace_root=spec.workspace_root,
+                            stop=spec.stop,
+                            policy=spec.policy,
+                            skills=_load_skills(spec.skills),
+                        )
+                    except Exception as e:
+                        # Fix #55: Handle agent crash gracefully
+                        self.config_store.update_member_status(spec.name, 'error')
+                        if message.sender:
+                            self.inbox_store.send(
+                                TeamMessage(
+                                    id=uuid.uuid4().hex,
+                                    sender=spec.name,
+                                    recipient=message.sender,
+                                    message_type=TeamMessageType.message,
+                                    body=f'Agent error: {e}',
+                                    metadata={'error': True},
+                                )
+                            )
+                        continue
+                    task_id = str(message.metadata.get('task_id', '')).strip()
+                    if task_id:
+                        self._complete_task(task_id, spec.name, result.done, result)
+                    self.inbox_store.send(
+                        TeamMessage(
+                            id=uuid.uuid4().hex,
+                            sender=spec.name,
+                            recipient=message.sender or 'lead',
+                            message_type=TeamMessageType.message,
+                            body=result.final_output,
+                            metadata={
+                                'source_message_id': message.id,
+                                'task_id': task_id,
+                                'done': result.done,
+                                'stop_reason': result.stop_reason.value,
+                                'payload': run_result_to_dict(result, include_history=True),
+                            },
+                        )
                     )
-                )
-                self.config_store.update_member_status(spec.name, 'idle')
-                self.dispatch_ready_tasks(sender='scheduler')
+                    self.config_store.update_member_status(spec.name, 'idle')
+                    self.dispatch_ready_tasks(sender='scheduler')
+        except Exception as e:
+            # Fix #55: Catch any unexpected exception to prevent silent thread death
+            self.config_store.update_member_status(spec.name, 'error')
+        finally:
+            # Only set offline if not already shutdown
+            current = self.config_store.load()
+            for member in current.members:
+                if member.name == spec.name and member.status not in ('shutdown', 'error'):
+                    self.config_store.update_member_status(spec.name, 'offline')
+                    break
 
     def _complete_task(self, task_id: str, teammate_name: str, done: bool, result: RunResult) -> None:
         with self._lock:
