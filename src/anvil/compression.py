@@ -82,6 +82,7 @@ class CompactConfig:
 
 
 # Backward compatibility aliases (must be after definitions)
+# DEPRECATED: use CompactConfig directly
 CompressionConfig = CompactConfig
 
 # Legacy alias - create minimal TranscriptEntry class
@@ -148,10 +149,49 @@ class MessageGroup:
 
 # ============== Token Estimation ==============
 
+# CJK Unified Ideographs and extensions
+_CJK_RANGES = (
+    (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+    (0x3400, 0x4DBF),    # CJK Unified Ideographs Extension A
+    (0x20000, 0x2A6DF),  # CJK Unified Ideographs Extension B
+    (0x2A700, 0x2B73F),  # CJK Unified Ideographs Extension C
+    (0x2B740, 0x2B81F),  # CJK Unified Ideographs Extension D
+    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
+    (0x3000, 0x303F),    # CJK Symbols and Punctuation
+    (0xFF00, 0xFFEF),    # Halfwidth and Fullwidth Forms
+    (0x3040, 0x309F),    # Hiragana
+    (0x30A0, 0x30FF),    # Katakana
+    (0xAC00, 0xD7AF),    # Hangul Syllables
+)
+
+# Pre-built range objects for O(1) containment checks
+_CJK_RANGE_SET = tuple(range(start, end + 1) for start, end in _CJK_RANGES)
+
+
+def _is_cjk(char: str) -> bool:
+    """Check if a character is CJK (Chinese/Japanese/Korean).
+
+    Uses pre-built range objects for efficient O(1) lookup via ``in``.
+    """
+    code = ord(char)
+    return any(code in r for r in _CJK_RANGE_SET)
+
+
 def estimate_tokens(parts: Iterable[str]) -> int:
-    """估算 token 数量（原始实现）"""
-    total_chars = sum(len(part) for part in parts if part)
-    return max(1, total_chars // 4) if total_chars else 0
+    """Estimate token count with CJK-aware weighting.
+    
+    CJK characters typically tokenize to ~1.5-2 tokens each,
+    while ASCII characters average ~0.25 tokens (4 chars per token).
+    """
+    total = 0
+    for part in parts:
+        if not part:
+            continue
+        cjk_count = sum(1 for ch in part if _is_cjk(ch))
+        ascii_count = len(part) - cjk_count
+        # CJK: ~1.5 tokens per char, ASCII: ~0.25 tokens per char
+        total += int(cjk_count * 1.5 + ascii_count * 0.25)
+    return max(1, total) if total else 0
 
 
 def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:

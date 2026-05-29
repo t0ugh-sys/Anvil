@@ -45,6 +45,16 @@ class ToolUseState:
     last_compaction_reason: str = ''
     background_notifications: Tuple[ToolResult, ...] = tuple()
 
+    def replace(self, **kwargs: object) -> 'ToolUseState':
+        """Create a new state with only the specified fields changed.
+
+        Avoids repeating all 10 fields when only 1-2 need updating.
+        """
+        return ToolUseState(**{
+            f.name: kwargs.get(f.name, getattr(self, f.name))
+            for f in self.__dataclass_fields__.values()  # type: ignore[attr-defined]
+        })
+
 
 def build_tool_dispatch(
     *,
