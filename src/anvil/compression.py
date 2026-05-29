@@ -82,7 +82,7 @@ class CompactConfig:
 
 
 # Backward compatibility aliases (must be after definitions)
-# DEPRECATED: use CompactConfig directly
+# DEPRECATED: use CompactConfig directly. Kept for external consumers.
 CompressionConfig = CompactConfig
 
 # Legacy alias - create minimal TranscriptEntry class
