@@ -288,16 +288,10 @@ def _apply_background_notifications(
             )
         )
 
-    return ToolUseState(
+    return state.replace(
         history=tuple(history),
         tool_results=notifications,
-        todos=state.todos,
-        rounds_since_todo_update=state.rounds_since_todo_update,
         transcript=tuple(transcript),
-        compact_summary=state.compact_summary,
-        compaction_count=state.compaction_count,
-        archived_transcripts=state.archived_transcripts,
-        last_compaction_reason=state.last_compaction_reason,
         background_notifications=notifications,
     )
 
@@ -371,18 +365,7 @@ def _compact_state_if_needed(
         state.transcript,
         keep_last_results=compression_config.micro_keep_last_results,
     )
-    next_state = ToolUseState(
-        history=state.history,
-        tool_results=state.tool_results,
-        todos=state.todos,
-        rounds_since_todo_update=state.rounds_since_todo_update,
-        transcript=compacted_transcript,
-        compact_summary=state.compact_summary,
-        compaction_count=state.compaction_count,
-        archived_transcripts=state.archived_transcripts,
-        last_compaction_reason=state.last_compaction_reason,
-        background_notifications=state.background_notifications,
-    )
+    next_state = state.replace(transcript=compacted_transcript)
 
     estimated_tokens = estimate_tokens(
         [next_state.compact_summary, *[entry.content for entry in next_state.transcript]]
@@ -417,17 +400,12 @@ def _compact_state_if_needed(
             entries=next_state.transcript,
         )
     )
-    return ToolUseState(
-        history=next_state.history,
-        tool_results=next_state.tool_results,
-        todos=next_state.todos,
-        rounds_since_todo_update=next_state.rounds_since_todo_update,
+    return next_state.replace(
         transcript=(TranscriptEntry(kind='summary', content=summary),),
         compact_summary=summary,
         compaction_count=next_state.compaction_count + 1,
         archived_transcripts=tuple(archived_transcripts),
         last_compaction_reason=reason,
-        background_notifications=next_state.background_notifications,
     )
 
 
@@ -510,16 +488,12 @@ def execute_tool_use_round(
         tool_results=executed,
     )
     todo_snapshot = todo_manager.snapshot(previous_rounds_since_update=effective_state.rounds_since_todo_update)
-    draft_state = ToolUseState(
+    draft_state = effective_state.replace(
         history=updated_history,
         tool_results=tuple(executed),
         todos=todo_snapshot.items,
         rounds_since_todo_update=todo_snapshot.rounds_since_update,
         transcript=updated_transcript,
-        compact_summary=effective_state.compact_summary,
-        compaction_count=effective_state.compaction_count,
-        archived_transcripts=effective_state.archived_transcripts,
-        last_compaction_reason=effective_state.last_compaction_reason,
         background_notifications=notifications,
     )
     compacted_state = _compact_state_if_needed(

@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -294,6 +295,9 @@ class SkillLoader:
     
     def _load_external(self, name: str) -> bool:
         """Try to load an external skill."""
+        # Validate skill name to prevent arbitrary module loading
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f'Invalid skill name: {name!r}')
         try:
             # Try importing as a module
             import importlib
