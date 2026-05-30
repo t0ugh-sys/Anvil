@@ -7,6 +7,9 @@ Three-tier strategy (inspired by Claude Code):
 3. Message-aware: walk message objects extracting text/image/tool_use content
 
 File-type-aware ratios reduce estimation error from ~30% to ~10%.
+
+CJK characters (Chinese/Japanese/Korean) typically tokenize to ~1.5-2 tokens each,
+while ASCII characters average ~0.25 tokens (4 chars per token).
 """
 
 from __future__ import annotations
@@ -27,17 +30,55 @@ MESSAGE_OVERHEAD_TOKENS = 10
 TOOL_USE_OVERHEAD_TOKENS = 50
 ROLE_OVERHEAD_TOKENS = 4
 
+# CJK Unified Ideographs and extensions
+_CJK_RANGES = (
+    (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+    (0x3400, 0x4DBF),    # CJK Unified Ideographs Extension A
+    (0x20000, 0x2A6DF),  # CJK Unified Ideographs Extension B
+    (0x2A700, 0x2B73F),  # CJK Unified Ideographs Extension C
+    (0x2B740, 0x2B81F),  # CJK Unified Ideographs Extension D
+    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
+    (0x3000, 0x303F),    # CJK Symbols and Punctuation
+    (0xFF00, 0xFFEF),    # Halfwidth and Fullwidth Forms
+    (0x3040, 0x309F),    # Hiragana
+    (0x30A0, 0x30FF),    # Katakana
+    (0xAC00, 0xD7AF),    # Hangul Syllables
+)
+
+# Pre-built range objects for O(1) containment checks
+_CJK_RANGE_SET = tuple(range(start, end + 1) for start, end in _CJK_RANGES)
+
+
+def _is_cjk(char: str) -> bool:
+    """Check if a character is CJK (Chinese/Japanese/Korean)."""
+    code = ord(char)
+    return any(code in r for r in _CJK_RANGE_SET)
+
+
+def _count_cjk(text: str) -> int:
+    """Count CJK characters in text."""
+    return sum(1 for ch in text if _is_cjk(ch))
+
 
 def estimate_text_tokens(text: str, *, is_json: bool = False) -> int:
-    """Estimate tokens for a text string.
+    """Estimate tokens for a text string with CJK awareness.
 
+    CJK characters: ~1.5 tokens per character.
+    ASCII/Latin characters: ~0.25 tokens per character (4 chars per token).
     JSON content uses char/2 ratio (more tokens per char due to syntax).
-    Default text uses char/4 ratio.
     """
     if not text:
         return 0
-    chars_per_token = CHARS_PER_TOKEN_JSON if is_json else CHARS_PER_TOKEN_DEFAULT
-    return max(1, len(text) // chars_per_token)
+
+    if is_json:
+        # JSON: treat as mostly ASCII with syntax overhead
+        return max(1, len(text) // CHARS_PER_TOKEN_JSON)
+
+    # CJK-aware estimation
+    cjk_count = _count_cjk(text)
+    ascii_count = len(text) - cjk_count
+    # CJK: ~1.5 tokens per char, ASCII: ~0.25 tokens per char (4 chars/token)
+    return max(1, int(cjk_count * 1.5 + ascii_count * 0.25))
 
 
 def _is_json_like(text: str) -> bool:
@@ -132,9 +173,15 @@ def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
 
 
 def estimate_tokens(parts: Sequence[str]) -> int:
-    """Estimate tokens for a sequence of text parts (backward compatible)."""
-    total_chars = sum(len(part) for part in parts if part)
-    return max(1, total_chars // CHARS_PER_TOKEN_DEFAULT) if total_chars else 0
+    """Estimate tokens for a sequence of text parts (backward compatible, CJK-aware)."""
+    total = 0
+    for part in parts:
+        if not part:
+            continue
+        cjk_count = _count_cjk(part)
+        ascii_count = len(part) - cjk_count
+        total += int(cjk_count * 1.5 + ascii_count * 0.25)
+    return max(1, total) if total else 0
 
 
 # ============== API Usage Integration ==============
