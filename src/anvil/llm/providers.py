@@ -61,6 +61,31 @@ def _request_with_retry(
         raise ProviderHttpError(status_code=status, body=body) from exc
 
 
+def _http_post_json(
+    endpoint: str,
+    payload: dict,
+    headers: Dict[str, str],
+    timeout_s: float,
+) -> dict:
+    """Shared HTTP POST helper — serialises payload, sends request, returns parsed JSON.
+
+    Eliminates 4x duplicated request/error-handling boilerplate across providers.
+    """
+    body = json.dumps(payload).encode('utf-8')
+    request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read().decode('utf-8')
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        error_body = ''
+        try:
+            error_body = exc.read().decode('utf-8', errors='replace')
+        except Exception:
+            error_body = str(exc)
+        raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+
 def _anthropic_invoke_factory(
     *,
     api_key: str,
@@ -101,19 +126,7 @@ def _anthropic_invoke_factory(
                 payload['tool_choice'] = {'type': 'tool', 'name': 'write_file'}
             else:
                 payload['tool_choice'] = {'type': 'any'}
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -126,8 +139,10 @@ def _anthropic_invoke_factory(
             return _extract_anthropic_text(response)
         except ProviderHttpError as exc:
             error_msg = f'Anthropic API error: HTTP {exc.status_code}'
-            if exc.body:
+            if debug and exc.body:
                 error_msg += f' - {exc.body[:200]}'
+            elif exc.body:
+                error_msg += f' - {exc.body[:100]}'
             raise ValueError(error_msg) from exc
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             detail = str(exc).strip()
@@ -414,19 +429,7 @@ def _gemini_invoke_factory(
             'contents': [{'parts': [{'text': prompt}]}],
             'generationConfig': {'temperature': temperature},
         }
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -446,8 +449,10 @@ def _gemini_invoke_factory(
             return parts[0].get('text', '')
         except ProviderHttpError as exc:
             error_msg = f'Gemini API error: HTTP {exc.status_code}'
-            if exc.body:
+            if debug and exc.body:
                 error_msg += f' - {exc.body[:200]}'
+            elif exc.body:
+                error_msg += f' - {exc.body[:100]}'
             raise ValueError(error_msg) from exc
         except (KeyError, IndexError) as exc:
             raise ValueError('invalid Gemini response format') from exc
@@ -470,7 +475,7 @@ def anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
-        enable_native_tools=enable_native_tools,
+        debug=debug, enable_native_tools=enable_native_tools,
     )
 
 
@@ -488,6 +493,7 @@ def gemini_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
+        debug=debug,
     )
 
 
@@ -521,26 +527,14 @@ def openai_compatible_chat_invoke_factory(
             'messages': messages,
             'temperature': temperature,
         }
-        body = json.dumps(payload).encode('utf-8')
-        headers = {
+        req_headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/Anvil)',
             'Authorization': f'Bearer {api_key}',
         }
-        headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        req_headers.update(extra_headers)
+        return _http_post_json(endpoint, payload, req_headers, timeout_s)
 
     def invoke(messages: List[Dict[str, str]]) -> str:
         def try_model(current_model: str) -> str | None:
@@ -661,26 +655,14 @@ def _openai_compatible_invoke_factory(
                 'messages': [{'role': 'user', 'content': prompt}],
                 'temperature': temperature,
             }
-        body = json.dumps(payload).encode('utf-8')
-        headers = {
+        req_headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/Anvil)',
             'Authorization': f'Bearer {api_key}',
         }
-        headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        req_headers.update(extra_headers)
+        return _http_post_json(endpoint, payload, req_headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         def try_model(current_model: str) -> str | None:
