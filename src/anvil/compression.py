@@ -12,6 +12,21 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+__all__ = [
+    'CompactConfig',
+    'CompactManager',
+    'CompactState',
+    'CompactResult',
+    'CompactStrategy',
+    'CompactReason',
+    'estimate_tokens',
+    'estimate_messages_tokens',
+    'micro_compact_messages',
+    'partial_compact_messages',
+    'TranscriptEntry',
+    'MessageGroup',
+]
+
 # Compression thresholds (fraction of max_context_tokens)
 PARTIAL_COMPACT_THRESHOLD = 0.8
 FULL_COMPACT_THRESHOLD = 0.95

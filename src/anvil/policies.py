@@ -16,6 +16,9 @@ class Capability(str, Enum):
     memory = 'memory'
 
 
+__all__ = ['TOOL_CAPABILITIES', 'PolicyManager']
+
+
 TOOL_CAPABILITIES: Dict[str, Tuple[Capability, ...]] = {
     'read_file': (Capability.read,),
     'search': (Capability.read,),

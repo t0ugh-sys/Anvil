@@ -9,6 +9,10 @@ from ..run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 from .base import MemoryContext
 
 
+__all__ = ['JsonlMemoryStore']
+
+
+
 def _default_summary() -> Dict[str, Any]:
     return {
         'schema_version': SCHEMA_VERSION,

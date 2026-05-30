@@ -18,6 +18,9 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+__all__ = ['EventRow', 'SCHEMA_VERSION']
+
+
 @dataclass(frozen=True)
 class EventRow:
     schema_version: str

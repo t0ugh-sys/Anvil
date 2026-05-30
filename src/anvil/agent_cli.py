@@ -27,22 +27,24 @@ from .ops.doctor import format_doctor_report, run_provider_doctor
 from .utils import default_run_id
 
 
+__all__ = ['build_parser', 'main']
+
+
+
+__all__ = ['build_parser', 'main']
+
+
+
 def _build_coding_decider(args: argparse.Namespace, skills=None):
-    original = _coding_runtime.build_invoke_from_args
-    _coding_runtime.build_invoke_from_args = build_invoke_from_args
-    try:
-        return _coding_runtime.build_coding_decider(args, skills)
-    finally:
-        _coding_runtime.build_invoke_from_args = original
+    return _coding_runtime.build_coding_decider(
+        args, skills, invoke_factory=build_invoke_from_args,
+    )
 
 
 def _build_coding_summarizer(args: argparse.Namespace):
-    original = _coding_runtime.build_invoke_from_args
-    _coding_runtime.build_invoke_from_args = build_invoke_from_args
-    try:
-        return _coding_runtime.build_coding_summarizer(args)
-    finally:
-        _coding_runtime.build_invoke_from_args = original
+    return _coding_runtime.build_coding_summarizer(
+        args, invoke_factory=build_invoke_from_args,
+    )
 
 
 def _load_skills_from_args(args: argparse.Namespace):

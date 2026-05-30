@@ -24,6 +24,12 @@ try:
 except Exception:  # pragma: no cover
     yaml = None
 
+__all__ = [
+    'load_config',
+    'load_yaml_config',
+    'load_json_config',
+    'merge_config',
+]
 
 PathLike = Union[str, Path]
 

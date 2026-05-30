@@ -6,6 +6,13 @@ from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 from .policies import Capability
 
+__all__ = [
+    'Capability',
+    'PermissionRule',
+    'PermissionRuleSet',
+    'PermissionManager',
+]
+
 
 class PermissionMode(str):
     allow = 'allow'

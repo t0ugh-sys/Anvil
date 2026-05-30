@@ -16,6 +16,10 @@ from .task_store import TaskStore
 from .utils import build_jsonl_observer, default_run_id, merge_observers
 
 
+__all__ = ['CodeRuntime']
+
+
+
 class CodeRuntime:
     def __init__(self, args, *, goal: str) -> None:
         self.args = args

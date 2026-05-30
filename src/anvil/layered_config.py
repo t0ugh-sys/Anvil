@@ -28,6 +28,12 @@ except Exception:  # pragma: no cover
 
 PathLike = Union[str, Path]
 
+__all__ = [
+    'ConfigLayer',
+    'LayeredConfig',
+    'BUILTIN_DEFAULTS',
+]
+
 
 # ============== Built-in Defaults ==============
 

@@ -16,6 +16,10 @@ try:
 except ImportError:  # pragma: no cover
     SkillLoader = None  # type: ignore[assignment]
 
+__all__ = [
+    'run_coding_agent',
+]
+
 
 @dataclass(frozen=True)
 class CodingAgentState(ToolUseState):

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Iterable, Literal
 
 
+__all__ = ['ChatMessage', 'MessageRole']
+
 MessageRole = Literal['system', 'user', 'assistant']
 
 

@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 
 from .agent_protocol import ToolResult
 
+__all__ = ['BackgroundTaskManager']
+
 
 @dataclass(frozen=True)
 class BackgroundTaskInfo:

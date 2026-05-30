@@ -14,6 +14,8 @@ MAX_TOOL_HISTORY = 50
 TAIL_WINDOW_BYTES = 16 * 1024  # 16KB tail window for fast metadata reads
 DIRTY_WRITE_INTERVAL_S = 5.0  # Write session state at most every 5s when dirty
 
+__all__ = ['SessionState', 'SessionStore']
+
 
 def _default_session_id() -> str:
     return utc_now_iso().replace(':', '').replace('-', '').replace('+00:00', 'Z')
@@ -21,6 +23,8 @@ def _default_session_id() -> str:
 
 @dataclass
 class SessionState:
+    """Session state data class."""
+
     session_id: str
     workspace_root: str
     goal: str

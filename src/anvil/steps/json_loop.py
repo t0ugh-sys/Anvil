@@ -14,6 +14,10 @@ class JsonLoopState:
     last_answer: str = ''
 
 
+__all__ = ['build_json_loop_prompt']
+
+
+
 def build_json_loop_prompt(*, goal: str, history: Tuple[str, ...], history_window: int) -> str:
     recent_history = list(history[-history_window:]) if history_window > 0 else []
     return f"""

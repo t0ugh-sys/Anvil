@@ -13,6 +13,19 @@ ChatInvokeFn = Callable[[List[Dict[str, str]]], str]
 
 from ..retry import NonRetryableError, RetryExhausted, with_retry
 
+__all__ = [
+    'ProviderHttpError',
+    'build_invoke_from_args',
+    'anthropic_invoke_factory',
+    'gemini_invoke_factory',
+    'openai_compatible_chat_invoke_factory',
+    'list_providers',
+    'get_provider',
+    'parse_provider_headers',
+    'InvokeFn',
+    'ChatInvokeFn',
+]
+
 DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
 
 
@@ -530,43 +543,57 @@ def openai_compatible_chat_invoke_factory(
         return json.loads(raw)
 
     def invoke(messages: List[Dict[str, str]]) -> str:
-        last_error: Optional[ProviderHttpError] = None
-
-        for current_model in models_to_try:
-            try:
-                data = _request_with_retry(
-                    request_fn=lambda: _request_once(messages, current_model),
-                    max_retries=max_retries,
-                    retry_backoff_s=retry_backoff_s,
-                    retry_http_codes=retry_http_codes,
-                )
-            except ProviderHttpError as exc:
-                last_error = exc
-                continue
-
+        def try_model(current_model: str) -> str | None:
+            data = _request_with_retry(
+                request_fn=lambda: _request_once(messages, current_model),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
             choices = data.get('choices', [])
             if not choices:
-                continue
+                return None
             first = choices[0]
             if not isinstance(first, dict):
-                continue
+                return None
             message = first.get('message', {})
             if not isinstance(message, dict):
-                continue
+                return None
             content = message.get('content', '')
             if not isinstance(content, str):
-                continue
+                return None
             return content
 
-        if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
-        raise ValueError('provider request failed without response')
+        return _with_model_fallback(models_to_try, try_model, debug)
 
     return invoke
+
+
+def _with_model_fallback(
+    models_to_try: list[str],
+    try_model: Callable[[str], str | None],
+    debug: bool,
+) -> str:
+    """Try each model in order; on ProviderHttpError try next; on parse miss return None to retry.
+
+    Eliminates duplicated fallback + error-raising boilerplate across providers.
+    """
+    last_error: ProviderHttpError | None = None
+    for model in models_to_try:
+        try:
+            result = try_model(model)
+            if result is not None:
+                return result
+        except ProviderHttpError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        if debug:
+            raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
+        raise ValueError(
+            f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
+        )
+    raise ValueError('provider request failed without response')
 
 
 def _mock_invoke_factory(model: str, *, mode: str) -> InvokeFn:
@@ -656,20 +683,13 @@ def _openai_compatible_invoke_factory(
         return json.loads(raw)
 
     def invoke(prompt: str) -> str:
-        last_error: Optional[ProviderHttpError] = None
-
-        for current_model in models_to_try:
-            try:
-                data = _request_with_retry(
-                    request_fn=lambda: _request_once(prompt, current_model),
-                    max_retries=max_retries,
-                    retry_backoff_s=retry_backoff_s,
-                    retry_http_codes=retry_http_codes,
-                )
-            except ProviderHttpError as exc:
-                last_error = exc
-                continue
-
+        def try_model(current_model: str) -> str | None:
+            data = _request_with_retry(
+                request_fn=lambda: _request_once(prompt, current_model),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
             if wire_api == 'responses':
                 output_text = data.get('output_text')
                 if isinstance(output_text, str) and output_text:
@@ -692,29 +712,23 @@ def _openai_compatible_invoke_factory(
                     merged = ''.join(fragments).strip()
                     if merged:
                         return merged
-                raise ValueError('invalid responses output: no output_text/content')
+                return None
 
             choices = data.get('choices', [])
             if not isinstance(choices, list) or not choices:
-                raise ValueError('invalid openai-compatible response: choices missing')
+                return None
             first = choices[0]
             if not isinstance(first, dict):
-                raise ValueError('invalid openai-compatible response: choice item invalid')
+                return None
             message = first.get('message', {})
             if not isinstance(message, dict):
-                raise ValueError('invalid openai-compatible response: message invalid')
+                return None
             content = message.get('content', '')
             if not isinstance(content, str):
-                raise ValueError('invalid openai-compatible response: content invalid')
+                return None
             return content
 
-        if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
-        raise ValueError('provider request failed without response')
+        return _with_model_fallback(models_to_try, try_model, debug)
 
     return invoke
 
