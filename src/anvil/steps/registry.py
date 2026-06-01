@@ -12,6 +12,9 @@ from .json_loop import JsonLoopState, make_json_decision_step
 StepBundle = Tuple[StepFn[Any], Any]
 StepBuilder = Callable[[argparse.Namespace], StepBundle]
 
+__all__ = ['StepRegistry', 'build_default_registry']
+
+
 
 @dataclass
 class StepRegistry:

@@ -7,6 +7,8 @@ This module defines a small, stable schema for run artifacts so that:
 The schema is intentionally stdlib-only.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Final, Optional
@@ -18,7 +20,7 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-__all__ = ['EventRow', 'SCHEMA_VERSION']
+__all__ = ['EventRow', 'SCHEMA_VERSION', 'utc_now_iso']
 
 
 @dataclass(frozen=True)

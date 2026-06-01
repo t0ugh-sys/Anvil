@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+__all__ = ['register_tools_parser', 'register_skills_parser', 'register_replay_parser', 'register_doctor_parser']
+
 
 def register_tools_parser(subparsers, *, handler) -> argparse.ArgumentParser:
     tools = subparsers.add_parser(

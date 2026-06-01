@@ -4,6 +4,8 @@ from ..messages import render_transcript
 from ..session import SessionStore
 from .event_viewer import render_event_stream
 
+__all__ = ['render_session', 'render_session_diff', 'parse_limit']
+
 
 def parse_limit(argument: str, *, default: int, maximum: int) -> int:
     raw = argument.strip()
