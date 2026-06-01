@@ -3,10 +3,20 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from ..agent_protocol import ToolResult
 from ..tools import ToolContext
+
+__all__ = [
+    'git_status_tool',
+    'git_branch_list_tool',
+    'git_checkout_tool',
+    'git_pull_tool',
+    'git_merge_tool',
+    'git_merge_and_push_tool',
+    'git_push_tool',
+]
 
 
 @dataclass(frozen=True)

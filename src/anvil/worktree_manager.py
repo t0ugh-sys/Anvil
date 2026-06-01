@@ -9,6 +9,8 @@ from typing import Literal
 
 IsolationMode = Literal['copy', 'git']
 
+__all__ = ['WorkspaceLease', 'WorktreeManager']
+
 
 @dataclass(frozen=True)
 class WorkspaceLease:
