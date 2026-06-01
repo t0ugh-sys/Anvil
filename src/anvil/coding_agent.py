@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -18,12 +17,11 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     'run_coding_agent',
+    'CodingAgentState',
 ]
 
-
-@dataclass(frozen=True)
-class CodingAgentState(ToolUseState):
-    pass
+# Backward-compatible alias
+CodingAgentState = ToolUseState
 
 
 def build_coding_step(
@@ -62,7 +60,7 @@ def run_coding_agent(
     compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
-) -> RunResult[CodingAgentState]:
+) -> RunResult[ToolUseState]:
     step = build_coding_step(
         decider,
         workspace_root=workspace_root,
@@ -76,7 +74,7 @@ def run_coding_agent(
     agent = AnvilAgent(step=step, stop=stop or StopConfig(max_steps=20, max_elapsed_s=60.0))
     return agent.run(
         goal=goal,
-        initial_state=CodingAgentState(),
+        initial_state=ToolUseState(),
         observer=observer,
         context_provider=context_provider,
     )

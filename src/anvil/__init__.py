@@ -1,6 +1,6 @@
 from .core.agent import AnvilAgent, RunResult, StepContext, StepResult
 from .core.serialization import run_result_to_dict, run_result_to_json
-from .core.stop import StopConfig, StopReason
+from .core.types import StopConfig, StopReason
 from .memory import JsonlMemoryStore, MemoryContext, MemoryStore
 
 # New modules
