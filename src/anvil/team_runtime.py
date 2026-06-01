@@ -18,6 +18,12 @@ from .skills import SkillLoader
 from .task_graph import Task, TaskGraph, TaskStatus
 from .task_store import TaskStore
 
+__all__ = [
+    'TeamMessageType', 'TeamMessage', 'TeamMember', 'TeamConfig',
+    'TeamConfigStore', 'JsonlTeamInboxStore',
+    'PersistentTeammateSpec', 'PersistentTeamRuntime',
+]
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()

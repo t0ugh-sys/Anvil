@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from ..core.types import StepContext, StepResult
 
+__all__ = ['DemoState', 'demo_step']
+
 
 @dataclass(frozen=True)
 class DemoState:
