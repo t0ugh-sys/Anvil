@@ -6,13 +6,15 @@ Provides structured logging with different levels and outputs.
 
 from __future__ import annotations
 
+import datetime
+import json
 import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 
-__all__ = ['LogLevel', 'setup_logging']
+__all__ = ['LogLevel', 'Logger', 'get_logger', 'set_logger', 'setup_logging']
 
 
 class LogLevel(Enum):
@@ -50,12 +52,10 @@ class Logger:
         return level.value >= self.level.value
     
     def _format(self, level: LogLevel, message: str, **kwargs: Any) -> str:
-        import datetime
         timestamp = datetime.datetime.now().isoformat()
         base = f"[{timestamp}] {level.name} [{self.name}] {message}"
         
         if kwargs:
-            import json
             extra = json.dumps(kwargs, ensure_ascii=False)
             base += f" | {extra}"
         
@@ -66,11 +66,7 @@ class Logger:
             print(formatted, file=sys.stdout)
         elif self.output == LogOutput.STDERR:
             print(formatted, file=sys.stderr)
-        elif self.output == LogOutput.FILE and self.file_path:
-            self.file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.file_path, 'a', encoding='utf-8') as f:
-                f.write(formatted + '\n')
-        elif self.output == LogOutput.JSONL and self.file_path:
+        elif self.output in (LogOutput.FILE, LogOutput.JSONL) and self.file_path:
             self.file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.file_path, 'a', encoding='utf-8') as f:
                 f.write(formatted + '\n')

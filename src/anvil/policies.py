@@ -73,17 +73,13 @@ class ToolPolicy:
         required = TOOL_CAPABILITIES.get(tool_name, tuple())
         if not required:
             return True
-        denied = set(self.denied)
-        allowed = set(self.allowed)
-        if any(capability in denied for capability in required):
+        if any(capability in self.denied for capability in required):
             return False
-        return all(capability in allowed for capability in required)
+        return all(capability in self.allowed for capability in required)
 
     def denied_capabilities_for_tool(self, tool_name: str) -> Tuple[Capability, ...]:
         required = TOOL_CAPABILITIES.get(tool_name, tuple())
-        denied = set(self.denied)
-        allowed = set(self.allowed)
-        blocked = [capability for capability in required if capability in denied or capability not in allowed]
+        blocked = [capability for capability in required if capability in self.denied or capability not in self.allowed]
         return tuple(blocked)
 
     def to_dict(self) -> Dict[str, object]:
