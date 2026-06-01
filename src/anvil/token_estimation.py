@@ -20,6 +20,13 @@ from typing import Any, Dict, List, Sequence
 
 __all__ = [
     'estimate_tokens',
+    'estimate_text_tokens',
+    'estimate_content_tokens',
+    'estimate_message_tokens',
+    'estimate_messages_tokens',
+    'TokenUsage',
+    'extract_usage',
+    'HybridTokenCounter',
 ]
 
 # Token estimation constants
@@ -174,13 +181,7 @@ def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
 
 def estimate_tokens(parts: Sequence[str]) -> int:
     """Estimate tokens for a sequence of text parts (backward compatible, CJK-aware)."""
-    total = 0
-    for part in parts:
-        if not part:
-            continue
-        cjk_count = _count_cjk(part)
-        ascii_count = len(part) - cjk_count
-        total += int(cjk_count * 1.5 + ascii_count * 0.25)
+    total = sum(estimate_text_tokens(part) for part in parts if part)
     return max(1, total) if total else 0
 
 
@@ -230,19 +231,20 @@ class HybridTokenCounter:
         if usage.input_tokens > 0 and message_count > 0:
             self._last_usage = usage
             self._last_message_count = message_count
+            # Store chars-to-tokens ratio from this response
+            # (total_chars will be computed on next estimate_messages call)
 
     def estimate_messages(self, messages: List[Dict[str, Any]]) -> int:
         """Estimate tokens for messages, using API calibration if available."""
         if self._last_usage is not None and self._last_message_count > 0:
-            # Use calibrated chars_per_token from last API response
             total_chars = sum(
                 len(json.dumps(msg, ensure_ascii=False)) if isinstance(msg.get('content'), list)
                 else len(str(msg.get('content', '')))
                 for msg in messages
             )
-            # Compute chars per token from last actual usage
-            calibrated_cpt = total_chars / self._last_usage.input_tokens if self._last_usage.input_tokens > 0 else CHARS_PER_TOKEN_DEFAULT
-            return max(1, int(total_chars / calibrated_cpt))
+            # Scale by ratio: last API input_tokens per message_count, adjusted for current message count
+            tokens_per_message = self._last_usage.input_tokens / self._last_message_count
+            return max(1, int(tokens_per_message * len(messages)))
 
         # Fallback to heuristic
         return estimate_messages_tokens(messages)

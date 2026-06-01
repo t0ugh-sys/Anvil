@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
@@ -11,6 +11,10 @@ __all__ = [
     'PermissionRule',
     'PermissionRuleSet',
     'PermissionManager',
+    'PermissionMode',
+    'PermissionRequest',
+    'PermissionDecision',
+    'merge_rule_sets',
 ]
 
 
@@ -57,20 +61,6 @@ class PermissionRuleSet:
     source: str
     rules: Tuple[PermissionRule, ...] = ()
 
-    def find_rule(self, tool_name: str) -> PermissionRule | None:
-        """Find a matching rule for the given tool name."""
-        # Exact match first, then wildcard
-        for rule in self.rules:
-            if rule.tool_pattern == tool_name:
-                return rule
-        for rule in self.rules:
-            if rule.tool_pattern == '*':
-                return rule
-        return None
-
-
-# Rule source precedence (lowest to highest)
-RULE_SOURCE_PRECEDENCE = ('user', 'project', 'session', 'policy')
 
 
 def merge_rule_sets(rule_sets: Sequence[PermissionRuleSet]) -> Tuple[PermissionRule, ...]:

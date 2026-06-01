@@ -13,6 +13,9 @@ from .base import ToolContext, iter_searchable_files
 # Constants
 MAX_FETCH_URL_CHARS = 5000
 MAX_SEARCH_SNIPPET_CHARS = 200
+_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+__all__ = ['search_tool', 'web_search_tool', 'fetch_url_tool', 'search_tool_specs']
 MAX_WEB_RESULT_TITLE_CHARS = 120
 
 # Search file extensions
@@ -127,7 +130,7 @@ def web_search_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
         url = f'https://html.duckduckgo.com/html/?q={encoded_query}'
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': _USER_AGENT
         }
         request = urllib.request.Request(url, headers=headers)
         
@@ -186,7 +189,7 @@ def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
 
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': _USER_AGENT
         }
         request = urllib.request.Request(url, headers=headers)
         
