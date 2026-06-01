@@ -12,11 +12,11 @@ The main entry point is build_default_tools() which returns a dispatch map.
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable
 
 from ..agent_protocol import ToolResult
 from ..policies import TOOL_CAPABILITIES
-from ..tool_spec import ToolDef, ToolRisk, ToolSpec
+from ..tool_spec import ToolRisk, ToolSpec
 from .base import (
     ToolContext,
     ToolDispatchMap,
@@ -49,9 +49,6 @@ __all__ = [
     'builtin_tool_registrations',
     'builtin_tool_specs',
     'builtin_tool_specs_map',
-    'register_tool_handler',
-    'register_tool_def',
-    'get_tool_def',
     # Individual tools
     'read_file_tool',
     'write_file_tool',
@@ -70,8 +67,9 @@ __all__ = [
     'resolve_inside_workspace',
 ]
 
-# Registry of full tool definitions (for validation, metadata)
-_tool_defs: Dict[str, ToolDef] = {}
+def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolDispatchMap:
+    """Build a dispatch map from registrations."""
+    return {name: handler for name, handler in registrations}
 
 
 def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: ToolFn) -> ToolDispatchMap:
@@ -80,25 +78,7 @@ def register_tool_handler(dispatch_map: ToolDispatchMap, name: str, handler: Too
     return dispatch_map
 
 
-def _build_tool_dispatch_map(registrations: Iterable[ToolRegistration]) -> ToolDispatchMap:
-    """Build a dispatch map from registrations."""
-    dispatch_map: ToolDispatchMap = {}
-    for name, handler in registrations:
-        register_tool_handler(dispatch_map, name, handler)
-    return dispatch_map
-
-
-def register_tool_def(tool_def: ToolDef) -> None:
-    """Register a full tool definition for validation and metadata."""
-    _tool_defs[tool_def.name] = tool_def
-
-
-def get_tool_def(name: str) -> ToolDef | None:
-    """Get the full tool definition for a tool by name."""
-    return _tool_defs.get(name)
-
-
-def _builtin_core_tool_registrations() -> List[ToolRegistration]:
+def _builtin_core_tool_registrations() -> list[ToolRegistration]:
     """Core tool registrations (file, search, command, memory)."""
     return [
         ('load_skill', load_skill_tool),
@@ -116,7 +96,7 @@ def _builtin_core_tool_registrations() -> List[ToolRegistration]:
     ]
 
 
-def _builtin_git_tool_registrations() -> List[ToolRegistration]:
+def _builtin_git_tool_registrations() -> list[ToolRegistration]:
     """Git tool registrations."""
     from ..ops.git_tools import (
         git_branch_list_tool,
@@ -139,7 +119,7 @@ def _builtin_git_tool_registrations() -> List[ToolRegistration]:
     ]
 
 
-def _builtin_github_tool_registrations() -> List[ToolRegistration]:
+def _builtin_github_tool_registrations() -> list[ToolRegistration]:
     """GitHub tool registrations."""
     from ..ops.github_tools import (
         gh_auth_status_tool,
@@ -174,13 +154,13 @@ def _builtin_github_tool_registrations() -> List[ToolRegistration]:
     ]
 
 
-def builtin_tool_registrations() -> List[ToolRegistration]:
+def builtin_tool_registrations() -> list[ToolRegistration]:
     """All built-in tool registrations.
     
     Keep tool names stable; they are part of the model <-> harness contract.
     To add a new tool, register one more handler here. The loop itself stays unchanged.
     """
-    registrations: List[ToolRegistration] = []
+    registrations: list[ToolRegistration] = []
     registrations.extend(_builtin_core_tool_registrations())
     registrations.extend(_builtin_git_tool_registrations())
     registrations.extend(_builtin_github_tool_registrations())
@@ -192,21 +172,19 @@ def build_default_tools() -> ToolDispatchMap:
     return _build_tool_dispatch_map(builtin_tool_registrations())
 
 
-def _risk_for_capabilities(capabilities: Tuple[object, ...]) -> ToolRisk:
+def _risk_for_capabilities(capabilities: tuple[object, ...]) -> ToolRisk:
     """Determine risk level from capabilities."""
-    if any(item.value in {'write', 'network'} for item in capabilities):
-        return ToolRisk.high
-    if any(item.value == 'execute' for item in capabilities):
+    if any(item.value in {'write', 'network', 'execute'} for item in capabilities):
         return ToolRisk.high
     if any(item.value == 'memory' for item in capabilities):
         return ToolRisk.medium
     return ToolRisk.low
 
 
-def builtin_tool_specs() -> List[ToolSpec]:
+def builtin_tool_specs() -> list[ToolSpec]:
     """Get specs for all built-in tools."""
     names = [name for name, _ in builtin_tool_registrations()]
-    specs: List[ToolSpec] = []
+    specs: list[ToolSpec] = []
     
     # Collect specs from each module
     all_module_specs = {
@@ -238,7 +216,7 @@ def builtin_tool_specs() -> List[ToolSpec]:
     return specs
 
 
-def builtin_tool_specs_map() -> Dict[str, ToolSpec]:
+def builtin_tool_specs_map() -> dict[str, ToolSpec]:
     """Get a map of tool name to spec."""
     return {item.name: item for item in builtin_tool_specs()}
 
@@ -250,19 +228,9 @@ def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -
         return ToolResult(id=tool_call.id, ok=False, output='', error=f'unknown tool: {tool_call.name}')
 
     # Phase 1: Validate input (if tool def has validator)
-    tool_def = _tool_defs.get(tool_call.name)
-    if tool_def and tool_def.validate_input:
-        validation = tool_def.validate_input(tool_call.arguments)
-        if not validation.ok:
-            return ToolResult(
-                id=tool_call.id,
-                ok=False,
-                output='',
-                error=validation.to_error_string(tool_call.name),
-            )
-
     # Phase 2: Check permissions
     from ..permissions import PermissionMode
+    capabilities = TOOL_CAPABILITIES.get(tool_call.name, tuple())
     if not context.policy.allows_tool(tool_call.name):
         denied = ', '.join(item.value for item in context.policy.denied_capabilities_for_tool(tool_call.name))
         return ToolResult(
@@ -274,7 +242,6 @@ def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -
         )
     permission_manager = getattr(context.policy, 'permission_manager', None)
     if permission_manager is not None:
-        capabilities = TOOL_CAPABILITIES.get(tool_call.name, tuple())
         request = permission_manager.build_request(
             tool_name=tool_call.name,
             arguments=dict(tool_call.arguments),
@@ -303,7 +270,7 @@ def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -
             tool_name=tool_call.name,
             arguments=args,
             workspace_root=context.workspace_root,
-            capabilities=TOOL_CAPABILITIES.get(tool_call.name, tuple()),
+            capabilities=capabilities,
         )
         permission_manager.record_decision(request.cache_key, PermissionMode.allow)
         result.metadata.setdefault('permission_decision', PermissionMode.allow)

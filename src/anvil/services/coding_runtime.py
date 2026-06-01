@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from ..agent_protocol import render_agent_step_schema
 from ..coding_agent import run_coding_agent
@@ -14,7 +14,7 @@ from ..skills import SkillLoader, list_skills
 from ..utils import resolve_goal
 
 
-__all__ = ['build_coding_decider', 'build_coding_summarizer', 'load_skills_from_args', 'run_code_command']
+__all__ = ['build_coding_prompt', 'build_coding_decider', 'build_coding_summarizer', 'load_skills_from_args', 'run_code_command']
 
 
 

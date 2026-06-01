@@ -2,17 +2,36 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 from typing import Any, Callable
 
 from ..core.types import StopConfig
 from ..task_graph import Task
 from ..team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
 
+__all__ = [
+    'parse_teammate',
+    'parse_team_message',
+    'spawn_team_runtime',
+    'append_startup_tasks',
+    'run_team_run_command',
+    'run_team_serve_command',
+    'run_team_add_task_command',
+    'run_team_send_command',
+    'run_team_broadcast_command',
+    'run_team_shutdown_command',
+]
+
 
 DeciderBuilder = Callable[[Any, Any], Any]
 SkillsLoader = Callable[[Any], Any]
+
+
+def _make_runtime(args: argparse.Namespace) -> PersistentTeamRuntime:
+    """Create a PersistentTeamRuntime from CLI args."""
+    workspace_root = Path(args.workspace).resolve()
+    return PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
 
 
 def parse_teammate(value: str) -> tuple[str, str]:
@@ -103,9 +122,9 @@ def run_team_run_command(
         expected_replies += len(teammate_specs)
 
     replies: list[dict[str, Any]] = []
-    deadline = datetime.now(timezone.utc).timestamp() + args.service_timeout_s
+    deadline = time.time() + args.service_timeout_s
     try:
-        while datetime.now(timezone.utc).timestamp() < deadline:
+        while time.time() < deadline:
             inbox = runtime.inbox_store.drain(args.sender)
             for item in inbox:
                 replies.append(item.to_dict())
@@ -153,8 +172,8 @@ def run_team_serve_command(
         runtime.broadcast(body, sender=args.sender)
 
     replies: list[dict[str, Any]] = []
-    deadline = datetime.now(timezone.utc).timestamp() + args.service_timeout_s if args.service_timeout_s > 0 else None
-    idle_since = datetime.now(timezone.utc).timestamp()
+    deadline = time.time() + args.service_timeout_s if args.service_timeout_s > 0 else None
+    idle_since = time.time()
     try:
         while True:
             runtime.dispatch_ready_tasks(sender='scheduler')
@@ -164,10 +183,10 @@ def run_team_serve_command(
 
             active = runtime.has_active_tasks() or runtime.has_pending_member_messages()
             if active:
-                idle_since = datetime.now(timezone.utc).timestamp()
-            if args.idle_exit_s > 0 and not active and (datetime.now(timezone.utc).timestamp() - idle_since) >= args.idle_exit_s:
+                idle_since = time.time()
+            if args.idle_exit_s > 0 and not active and (time.time() - idle_since) >= args.idle_exit_s:
                 break
-            if deadline is not None and datetime.now(timezone.utc).timestamp() >= deadline:
+            if deadline is not None and time.time() >= deadline:
                 break
             if runtime.all_teammates_shutdown():
                 break
@@ -194,14 +213,14 @@ def run_team_serve_command(
     return 0
 
 
-def run_team_add_task_command(args) -> int:
+def run_team_add_task_command(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace).resolve()
-    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+    runtime = _make_runtime(args)
     metadata: dict[str, Any] = {}
     if args.role:
         metadata['role'] = args.role
     task = Task(
-        id=args.task_id or f'task_{datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")}',
+        id=args.task_id or f'task_{int(time.time() * 1000)}',
         title=args.title or args.goal,
         goal=args.goal,
         dependencies=tuple(args.depends_on),
@@ -221,25 +240,22 @@ def run_team_add_task_command(args) -> int:
     return 0
 
 
-def run_team_send_command(args) -> int:
-    workspace_root = Path(args.workspace).resolve()
-    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+def run_team_send_command(args: argparse.Namespace) -> int:
+    runtime = _make_runtime(args)
     runtime.send_message(args.to, args.message, sender=args.sender)
     print('ok')
     return 0
 
 
-def run_team_broadcast_command(args) -> int:
-    workspace_root = Path(args.workspace).resolve()
-    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+def run_team_broadcast_command(args: argparse.Namespace) -> int:
+    runtime = _make_runtime(args)
     runtime.broadcast(args.message, sender=args.sender)
     print('ok')
     return 0
 
 
-def run_team_shutdown_command(args) -> int:
-    workspace_root = Path(args.workspace).resolve()
-    runtime = PersistentTeamRuntime((workspace_root / args.team_dir).resolve())
+def run_team_shutdown_command(args: argparse.Namespace) -> int:
+    runtime = _make_runtime(args)
     if args.all:
         runtime.shutdown_all(sender=args.sender, timeout_s=args.timeout_s)
     else:
