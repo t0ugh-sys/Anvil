@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Tuple
 
+__all__ = ['Task', 'TaskGraph', 'TaskStatus']
+
 
 class TaskStatus(str, Enum):
     pending = 'pending'
@@ -171,15 +173,18 @@ class TaskGraph:
             else:
                 next_status = TaskStatus.pending
 
-            updated[task.id] = Task(
-                id=task.id,
-                title=task.title,
-                goal=task.goal,
-                dependencies=task.dependencies,
-                assignee=task.assignee,
-                status=next_status,
-                metadata=dict(task.metadata),
-            )
+            if task.status == next_status:
+                updated[task.id] = task
+            else:
+                updated[task.id] = Task(
+                    id=task.id,
+                    title=task.title,
+                    goal=task.goal,
+                    dependencies=task.dependencies,
+                    assignee=task.assignee,
+                    status=next_status,
+                    metadata=dict(task.metadata),
+                )
         self._tasks = updated
 
     def to_dict(self) -> Dict[str, Any]:

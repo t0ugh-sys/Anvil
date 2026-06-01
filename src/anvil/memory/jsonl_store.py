@@ -156,20 +156,20 @@ class JsonlMemoryStore:
         state = self._read_state()
         history_tail = state.get('history_tail', [])
         if isinstance(history_tail, list):
-            steps = [item for item in history_tail if isinstance(item, str) and item]
-            if steps:
-                return steps[-last_k_steps:]
+            cached_steps = [item for item in history_tail if isinstance(item, str) and item]
+            if cached_steps:
+                return cached_steps[-last_k_steps:]
 
         rows = self._read_events()
-        steps: List[str] = []
+        event_steps: List[str] = []
         for row in rows:
             if row.get('event') == 'step_succeeded':
                 payload = row.get('payload', {})
                 if isinstance(payload, dict):
                     output = payload.get('output', '')
                     if isinstance(output, str) and output:
-                        steps.append(output)
-        return steps[-last_k_steps:]
+                        event_steps.append(output)
+        return event_steps[-last_k_steps:]
 
     def _summarize(self) -> None:
         rows = self._read_events()
