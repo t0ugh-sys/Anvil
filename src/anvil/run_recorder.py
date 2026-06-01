@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 
+__all__ = ['RunRecorder']
+
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')

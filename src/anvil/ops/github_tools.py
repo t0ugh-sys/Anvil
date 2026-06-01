@@ -9,6 +9,22 @@ from typing import Dict, List, Optional, Tuple
 from ..agent_protocol import ToolResult
 from ..tools import ToolContext
 
+__all__ = [
+    'gh_auth_status_tool',
+    'gh_repo_list_tool',
+    'gh_repo_create_tool',
+    'gh_repo_clone_tool',
+    'gh_issue_list_tool',
+    'gh_issue_create_tool',
+    'gh_issue_close_tool',
+    'gh_pr_list_tool',
+    'gh_pr_create_tool',
+    'gh_pr_view_tool',
+    'gh_pr_checks_tool',
+    'gh_pr_comment_tool',
+    'gh_pr_merge_tool',
+]
+
 
 @dataclass(frozen=True)
 class GhOptions:

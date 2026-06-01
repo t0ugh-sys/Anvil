@@ -8,6 +8,8 @@ from typing import Iterable, Tuple
 
 from .task_graph import Task, TaskGraph
 
+__all__ = ['TaskStore']
+
 
 @dataclass(frozen=True)
 class TaskStore:
