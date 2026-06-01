@@ -15,6 +15,10 @@ from .steps.registry import StepRegistry, build_default_registry
 from .utils import build_jsonl_observer, default_run_id, merge_observers, resolve_goal
 
 
+__all__ = ['build_parser', 'execute']
+
+
+
 def build_parser(registry: StepRegistry) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='Anvil')
     group = parser.add_mutually_exclusive_group(required=True)

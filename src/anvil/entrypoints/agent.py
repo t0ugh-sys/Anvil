@@ -7,6 +7,9 @@ from ..services.session_runtime import build_interactive_parser, run_interactive
 from ..utils import default_run_id
 
 
+__all__ = ['main']
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdin, 'reconfigure'):
         sys.stdin.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]

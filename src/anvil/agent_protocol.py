@@ -4,6 +4,13 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+__all__ = [
+    'ToolCall',
+    'AgentStep',
+    'render_agent_step_schema',
+    'parse_agent_step',
+]
+
 
 @dataclass(frozen=True)
 class ToolCall:

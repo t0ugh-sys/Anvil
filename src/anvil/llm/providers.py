@@ -13,6 +13,19 @@ ChatInvokeFn = Callable[[List[Dict[str, str]]], str]
 
 from ..retry import NonRetryableError, RetryExhausted, with_retry
 
+__all__ = [
+    'ProviderHttpError',
+    'build_invoke_from_args',
+    'anthropic_invoke_factory',
+    'gemini_invoke_factory',
+    'openai_compatible_chat_invoke_factory',
+    'list_providers',
+    'get_provider',
+    'parse_provider_headers',
+    'InvokeFn',
+    'ChatInvokeFn',
+]
+
 DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
 
 
@@ -48,6 +61,31 @@ def _request_with_retry(
         raise ProviderHttpError(status_code=status, body=body) from exc
 
 
+def _http_post_json(
+    endpoint: str,
+    payload: dict,
+    headers: Dict[str, str],
+    timeout_s: float,
+) -> dict:
+    """Shared HTTP POST helper — serialises payload, sends request, returns parsed JSON.
+
+    Eliminates 4x duplicated request/error-handling boilerplate across providers.
+    """
+    body = json.dumps(payload).encode('utf-8')
+    request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read().decode('utf-8')
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        error_body = ''
+        try:
+            error_body = exc.read().decode('utf-8', errors='replace')
+        except Exception:
+            error_body = str(exc)
+        raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+
 def _anthropic_invoke_factory(
     *,
     api_key: str,
@@ -58,6 +96,7 @@ def _anthropic_invoke_factory(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
     base_url: str = '',
+    debug: bool = False,
     enable_native_tools: bool = False,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
@@ -87,19 +126,7 @@ def _anthropic_invoke_factory(
                 payload['tool_choice'] = {'type': 'tool', 'name': 'write_file'}
             else:
                 payload['tool_choice'] = {'type': 'any'}
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -112,8 +139,10 @@ def _anthropic_invoke_factory(
             return _extract_anthropic_text(response)
         except ProviderHttpError as exc:
             error_msg = f'Anthropic API error: HTTP {exc.status_code}'
-            if exc.body:
+            if debug and exc.body:
                 error_msg += f' - {exc.body[:200]}'
+            elif exc.body:
+                error_msg += f' - {exc.body[:100]}'
             raise ValueError(error_msg) from exc
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             detail = str(exc).strip()
@@ -386,6 +415,7 @@ def _gemini_invoke_factory(
     retry_backoff_s: float,
     retry_http_codes: Set[int],
     base_url: str = '',
+    debug: bool = False,
 ) -> InvokeFn:
     resolved_base = base_url.rstrip('/') if base_url else 'https://generativelanguage.googleapis.com/v1'
     endpoint = f'{resolved_base}/models/{model}:generateContent?key={api_key}'
@@ -399,19 +429,7 @@ def _gemini_invoke_factory(
             'contents': [{'parts': [{'text': prompt}]}],
             'generationConfig': {'temperature': temperature},
         }
-        body = json.dumps(payload).encode('utf-8')
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-                return json.loads(raw)
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = str(exc)
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+        return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
         try:
@@ -431,8 +449,10 @@ def _gemini_invoke_factory(
             return parts[0].get('text', '')
         except ProviderHttpError as exc:
             error_msg = f'Gemini API error: HTTP {exc.status_code}'
-            if exc.body:
+            if debug and exc.body:
                 error_msg += f' - {exc.body[:200]}'
+            elif exc.body:
+                error_msg += f' - {exc.body[:100]}'
             raise ValueError(error_msg) from exc
         except (KeyError, IndexError) as exc:
             raise ValueError('invalid Gemini response format') from exc
@@ -455,7 +475,7 @@ def anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
-        enable_native_tools=enable_native_tools,
+        debug=debug, enable_native_tools=enable_native_tools,
     )
 
 
@@ -473,6 +493,7 @@ def gemini_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
+        debug=debug,
     )
 
 
@@ -506,65 +527,67 @@ def openai_compatible_chat_invoke_factory(
             'messages': messages,
             'temperature': temperature,
         }
-        body = json.dumps(payload).encode('utf-8')
-        headers = {
+        req_headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/Anvil)',
             'Authorization': f'Bearer {api_key}',
         }
-        headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        req_headers.update(extra_headers)
+        return _http_post_json(endpoint, payload, req_headers, timeout_s)
 
     def invoke(messages: List[Dict[str, str]]) -> str:
-        last_error: Optional[ProviderHttpError] = None
-
-        for current_model in models_to_try:
-            try:
-                data = _request_with_retry(
-                    request_fn=lambda: _request_once(messages, current_model),
-                    max_retries=max_retries,
-                    retry_backoff_s=retry_backoff_s,
-                    retry_http_codes=retry_http_codes,
-                )
-            except ProviderHttpError as exc:
-                last_error = exc
-                continue
-
+        def try_model(current_model: str) -> str | None:
+            data = _request_with_retry(
+                request_fn=lambda: _request_once(messages, current_model),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
             choices = data.get('choices', [])
             if not choices:
-                continue
+                return None
             first = choices[0]
             if not isinstance(first, dict):
-                continue
+                return None
             message = first.get('message', {})
             if not isinstance(message, dict):
-                continue
+                return None
             content = message.get('content', '')
             if not isinstance(content, str):
-                continue
+                return None
             return content
 
-        if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
-        raise ValueError('provider request failed without response')
+        return _with_model_fallback(models_to_try, try_model, debug)
 
     return invoke
+
+
+def _with_model_fallback(
+    models_to_try: list[str],
+    try_model: Callable[[str], str | None],
+    debug: bool,
+) -> str:
+    """Try each model in order; on ProviderHttpError try next; on parse miss return None to retry.
+
+    Eliminates duplicated fallback + error-raising boilerplate across providers.
+    """
+    last_error: ProviderHttpError | None = None
+    for model in models_to_try:
+        try:
+            result = try_model(model)
+            if result is not None:
+                return result
+        except ProviderHttpError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        if debug:
+            raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
+        raise ValueError(
+            f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
+        )
+    raise ValueError('provider request failed without response')
 
 
 def _mock_invoke_factory(model: str, *, mode: str) -> InvokeFn:
@@ -632,42 +655,23 @@ def _openai_compatible_invoke_factory(
                 'messages': [{'role': 'user', 'content': prompt}],
                 'temperature': temperature,
             }
-        body = json.dumps(payload).encode('utf-8')
-        headers = {
+        req_headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'User-Agent': 'Anvil/0.1 (+https://github.com/t0ugh-sys/Anvil)',
             'Authorization': f'Bearer {api_key}',
         }
-        headers.update(extra_headers)
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_s) as response:
-                raw = response.read().decode('utf-8')
-        except urllib.error.HTTPError as exc:
-            error_body = ''
-            try:
-                error_body = exc.read().decode('utf-8', errors='replace')
-            except Exception:
-                error_body = ''
-            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
-        return json.loads(raw)
+        req_headers.update(extra_headers)
+        return _http_post_json(endpoint, payload, req_headers, timeout_s)
 
     def invoke(prompt: str) -> str:
-        last_error: Optional[ProviderHttpError] = None
-
-        for current_model in models_to_try:
-            try:
-                data = _request_with_retry(
-                    request_fn=lambda: _request_once(prompt, current_model),
-                    max_retries=max_retries,
-                    retry_backoff_s=retry_backoff_s,
-                    retry_http_codes=retry_http_codes,
-                )
-            except ProviderHttpError as exc:
-                last_error = exc
-                continue
-
+        def try_model(current_model: str) -> str | None:
+            data = _request_with_retry(
+                request_fn=lambda: _request_once(prompt, current_model),
+                max_retries=max_retries,
+                retry_backoff_s=retry_backoff_s,
+                retry_http_codes=retry_http_codes,
+            )
             if wire_api == 'responses':
                 output_text = data.get('output_text')
                 if isinstance(output_text, str) and output_text:
@@ -690,31 +694,59 @@ def _openai_compatible_invoke_factory(
                     merged = ''.join(fragments).strip()
                     if merged:
                         return merged
-                raise ValueError('invalid responses output: no output_text/content')
+                return None
 
             choices = data.get('choices', [])
             if not isinstance(choices, list) or not choices:
-                raise ValueError('invalid openai-compatible response: choices missing')
+                return None
             first = choices[0]
             if not isinstance(first, dict):
-                raise ValueError('invalid openai-compatible response: choice item invalid')
+                return None
             message = first.get('message', {})
             if not isinstance(message, dict):
-                raise ValueError('invalid openai-compatible response: message invalid')
+                return None
             content = message.get('content', '')
             if not isinstance(content, str):
-                raise ValueError('invalid openai-compatible response: content invalid')
+                return None
             return content
 
-        if last_error is not None:
-            if debug:
-                raise ValueError(f'HTTP {last_error.status_code}: {last_error.body}')
-            raise ValueError(
-                f'HTTP {last_error.status_code}: request failed (enable --provider-debug for details)'
-            )
-        raise ValueError('provider request failed without response')
+        return _with_model_fallback(models_to_try, try_model, debug)
 
     return invoke
+
+
+def _parse_common_provider_args(args: argparse.Namespace) -> dict:
+    """Extract common provider arguments from CLI namespace.
+
+    Eliminates 3x duplicated arg-parsing boilerplate across providers.
+    """
+    temperature = float(getattr(args, 'temperature', 0.2))
+    timeout_s = float(getattr(args, 'provider_timeout_s', 60.0))
+    debug = bool(getattr(args, 'provider_debug', False))
+    max_retries = int(getattr(args, 'max_retries', 2))
+    retry_backoff_s = float(getattr(args, 'retry_backoff_s', 1.0))
+    retry_http_codes = set(int(item) for item in getattr(args, 'retry_http_code', []))
+    if not retry_http_codes:
+        retry_http_codes = set(DEFAULT_RETRY_HTTP_CODES)
+    base_url = str(getattr(args, 'base_url', '')).strip()
+    return {
+        'temperature': temperature,
+        'timeout_s': timeout_s,
+        'debug': debug,
+        'max_retries': max_retries,
+        'retry_backoff_s': retry_backoff_s,
+        'retry_http_codes': retry_http_codes,
+        'base_url': base_url,
+    }
+
+
+def _resolve_api_key(args: argparse.Namespace, default_env: str) -> str:
+    """Resolve API key from args and environment."""
+    api_key_env = str(getattr(args, 'api_key_env', default_env))
+    api_key = os.getenv(api_key_env, '').strip()
+    if not api_key:
+        raise ValueError(f'api key is missing: env {api_key_env}')
+    return api_key
 
 
 def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop') -> InvokeFn:
@@ -724,89 +756,44 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
     if provider == 'mock':
         return _mock_invoke_factory(model=model, mode=mode)
 
+    common = _parse_common_provider_args(args)
+
     if provider == 'openai_compatible':
-        base_url = str(getattr(args, 'base_url', '')).strip()
-        if not base_url:
+        if not common['base_url']:
             raise ValueError('base_url is required for openai_compatible provider')
         fallback_models = [item.strip() for item in getattr(args, 'fallback_model', []) if str(item).strip()]
         wire_api = str(getattr(args, 'wire_api', 'chat_completions')).strip()
         if wire_api not in {'chat_completions', 'responses'}:
             raise ValueError('wire_api must be one of: chat_completions,responses')
-        api_key_env = str(getattr(args, 'api_key_env', 'OPENAI_API_KEY'))
-        api_key = os.getenv(api_key_env, '').strip()
-        if not api_key:
-            raise ValueError(f'api key is missing: env {api_key_env}')
-        temperature = float(getattr(args, 'temperature', 0.2))
-        timeout_s = float(getattr(args, 'provider_timeout_s', 60.0))
-        debug = bool(getattr(args, 'provider_debug', False))
+        api_key = _resolve_api_key(args, 'OPENAI_API_KEY')
         extra_headers = parse_provider_headers(getattr(args, 'provider_header', []))
-        max_retries = int(getattr(args, 'max_retries', 2))
-        retry_backoff_s = float(getattr(args, 'retry_backoff_s', 1.0))
-        retry_http_codes = set(int(item) for item in getattr(args, 'retry_http_code', []))
-        if not retry_http_codes:
-            retry_http_codes = set(DEFAULT_RETRY_HTTP_CODES)
         return _openai_compatible_invoke_factory(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            fallback_models=fallback_models,
-            temperature=temperature,
-            timeout_s=timeout_s,
-            wire_api=wire_api,
-            debug=debug,
-            extra_headers=extra_headers,
-            max_retries=max_retries,
-            retry_backoff_s=retry_backoff_s,
-            retry_http_codes=retry_http_codes,
+            base_url=common['base_url'], api_key=api_key, model=model,
+            fallback_models=fallback_models, temperature=common['temperature'],
+            timeout_s=common['timeout_s'], wire_api=wire_api, debug=common['debug'],
+            extra_headers=extra_headers, max_retries=common['max_retries'],
+            retry_backoff_s=common['retry_backoff_s'], retry_http_codes=common['retry_http_codes'],
         )
 
     if provider == 'anthropic':
-        api_key_env = str(getattr(args, 'api_key_env', 'ANTHROPIC_API_KEY'))
-        api_key = os.getenv(api_key_env, '').strip()
-        if not api_key:
-            raise ValueError(f'api key is missing: env {api_key_env}')
-        base_url = str(getattr(args, 'base_url', '')).strip()
-        temperature = float(getattr(args, 'temperature', 0.2))
-        timeout_s = float(getattr(args, 'provider_timeout_s', 60.0))
-        max_retries = int(getattr(args, 'max_retries', 2))
-        retry_backoff_s = float(getattr(args, 'retry_backoff_s', 1.0))
-        retry_http_codes = set(int(item) for item in getattr(args, 'retry_http_code', []))
-        if not retry_http_codes:
-            retry_http_codes = set(DEFAULT_RETRY_HTTP_CODES)
+        api_key = _resolve_api_key(args, 'ANTHROPIC_API_KEY')
         return _anthropic_invoke_factory(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            temperature=temperature,
-            timeout_s=timeout_s,
-            max_retries=max_retries,
-            retry_backoff_s=retry_backoff_s,
-            retry_http_codes=retry_http_codes,
+            api_key=api_key, model=model, base_url=common['base_url'],
+            temperature=common['temperature'], timeout_s=common['timeout_s'],
+            max_retries=common['max_retries'], retry_backoff_s=common['retry_backoff_s'],
+            retry_http_codes=common['retry_http_codes'], debug=common['debug'],
             enable_native_tools=(mode == 'coding'),
         )
+
     if provider == 'gemini':
-        api_key_env = str(getattr(args, 'api_key_env', 'GEMINI_API_KEY'))
-        api_key = os.getenv(api_key_env, '').strip()
-        if not api_key:
-            raise ValueError(f'api key is missing: env {api_key_env}')
-        base_url = str(getattr(args, 'base_url', '')).strip()
-        temperature = float(getattr(args, 'temperature', 0.2))
-        timeout_s = float(getattr(args, 'provider_timeout_s', 60.0))
-        max_retries = int(getattr(args, 'max_retries', 2))
-        retry_backoff_s = float(getattr(args, 'retry_backoff_s', 1.0))
-        retry_http_codes = set(int(item) for item in getattr(args, 'retry_http_code', []))
-        if not retry_http_codes:
-            retry_http_codes = set(DEFAULT_RETRY_HTTP_CODES)
+        api_key = _resolve_api_key(args, 'GEMINI_API_KEY')
         return _gemini_invoke_factory(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            temperature=temperature,
-            timeout_s=timeout_s,
-            max_retries=max_retries,
-            retry_backoff_s=retry_backoff_s,
-            retry_http_codes=retry_http_codes,
+            api_key=api_key, model=model, base_url=common['base_url'],
+            temperature=common['temperature'], timeout_s=common['timeout_s'],
+            max_retries=common['max_retries'], retry_backoff_s=common['retry_backoff_s'],
+            retry_http_codes=common['retry_http_codes'], debug=common['debug'],
         )
+
     raise ValueError(f'unknown provider: {provider}')
 
 

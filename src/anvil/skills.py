@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,10 @@ from .agent_protocol import ToolResult
 
 
 # Skill definition
+__all__ = ['Skill', 'SkillLoader', 'get_skill', 'list_skills', 'skill_metadata', 'load_skill', 'unload_skill', 'build_skill_tools', 'get_prompt_context', 'list_loaded_skills', 'load_skills_from_args']
+
+
+
 class Skill:
     """Base class for skills."""
     
@@ -290,6 +295,9 @@ class SkillLoader:
     
     def _load_external(self, name: str) -> bool:
         """Try to load an external skill."""
+        # Validate skill name to prevent arbitrary module loading
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f'Invalid skill name: {name!r}')
         try:
             # Try importing as a module
             import importlib

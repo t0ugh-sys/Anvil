@@ -8,6 +8,8 @@ from .core.types import StopConfig
 from .subagents import SubAgentResult, SubAgentRuntime, SubAgentSpec
 from .task_graph import TaskGraph, TaskStatus
 
+__all__ = ['ScheduleBatchResult', 'TaskScheduler']
+
 
 @dataclass(frozen=True)
 class ScheduleBatchResult:

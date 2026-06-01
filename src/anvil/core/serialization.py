@@ -7,6 +7,10 @@ from typing import Any, Dict
 from .types import RunResult
 
 
+__all__ = ['run_result_to_dict', 'run_result_to_json']
+
+
+
 def run_result_to_dict(result: RunResult[Any], *, include_history: bool = True) -> Dict[str, Any]:
     payload: Dict[str, Any] = asdict(result)
     payload['stop_reason'] = result.stop_reason.value

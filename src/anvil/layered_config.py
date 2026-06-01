@@ -15,6 +15,7 @@ Each layer is optional. Later layers override earlier ones via deep merge.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
@@ -27,6 +28,12 @@ except Exception:  # pragma: no cover
     yaml = None
 
 PathLike = Union[str, Path]
+
+__all__ = [
+    'ConfigLayer',
+    'LayeredConfig',
+    'BUILTIN_DEFAULTS',
+]
 
 
 # ============== Built-in Defaults ==============
@@ -292,8 +299,8 @@ def build_layered_config(
         try:
             user_values = load_config_file(user_path)
             config.add_layer('user', str(user_path), user_values)
-        except Exception:
-            pass  # Silently skip invalid user config
+        except Exception as exc:
+            logging.warning('Failed to load user config from %s: %s', user_path, exc)
 
     # Layer 3: Project config
     if workspace_root:
@@ -302,8 +309,8 @@ def build_layered_config(
             try:
                 project_values = load_config_file(project_path)
                 config.add_layer('project', str(project_path), project_values)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning('Failed to load project config from %s: %s', project_path, exc)
 
     # Layer 4: Local config (gitignored)
     if workspace_root:
@@ -312,8 +319,8 @@ def build_layered_config(
             try:
                 local_values = load_config_file(local_path)
                 config.add_layer('local', str(local_path), local_values)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning('Failed to load local config from %s: %s', local_path, exc)
 
     # Layer 5: Environment variables
     env_values = load_env_vars(env_prefix)

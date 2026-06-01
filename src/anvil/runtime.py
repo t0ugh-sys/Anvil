@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .compression import CompressionConfig
+from .compression import CompactConfig
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, StopConfig
 from .memory.jsonl_store import JsonlMemoryStore
@@ -16,13 +16,17 @@ from .task_store import TaskStore
 from .utils import build_jsonl_observer, default_run_id, merge_observers
 
 
+__all__ = ['CodeRuntime']
+
+
+
 class CodeRuntime:
     def __init__(self, args, *, goal: str) -> None:
         self.args = args
         self.workspace_root = Path(args.workspace).resolve()
         self.goal = goal
         self.task_store = TaskStore((self.workspace_root / args.tasks_dir).resolve()) if args.tasks_dir else None
-        self.compression_config = CompressionConfig(
+        self.compression_config = CompactConfig(
             micro_keep_last_results=args.micro_compact_keep,
             max_context_tokens=args.max_context_tokens,
             recent_transcript_entries=args.recent_transcript_entries,

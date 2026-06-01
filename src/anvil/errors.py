@@ -12,6 +12,9 @@ from typing import Any
 
 # ============== Error Hierarchy ==============
 
+__all__ = ['AnvilError', 'ValidationError', 'AbortError', 'ShellError', 'ToolValidationError', 'is_abort_error', 'format_tool_error', 'format_error', 'validate_goal', 'validate_model', 'validate_temperature', 'validate_max_steps', 'validate_provider', 'validate_strategy']
+
+
 class AnvilError(Exception):
     """Base exception for Anvil."""
     code: str = "ANVIL_ERROR"

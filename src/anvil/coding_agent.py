@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .compression import CompressionConfig
+from .compression import CompactConfig
 from .core.agent import AnvilAgent
 from .core.types import ContextProviderFn, ObserverFn, RunResult, StopConfig
 from .policies import ToolPolicy
@@ -15,6 +15,10 @@ try:
     from .skills import SkillLoader
 except ImportError:  # pragma: no cover
     SkillLoader = None  # type: ignore[assignment]
+
+__all__ = [
+    'run_coding_agent',
+]
 
 
 @dataclass(frozen=True)
@@ -28,7 +32,7 @@ def build_coding_step(
     skills: Optional[SkillLoader] = None,
     policy: ToolPolicy = ToolPolicy.allow_all(),
     task_store: TaskStore | None = None,
-    compression_config: CompressionConfig | None = None,
+    compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
 ):
@@ -55,7 +59,7 @@ def run_coding_agent(
     skills: Optional[SkillLoader] = None,
     policy: ToolPolicy = ToolPolicy.allow_all(),
     task_store: TaskStore | None = None,
-    compression_config: CompressionConfig | None = None,
+    compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
 ) -> RunResult[CodingAgentState]:

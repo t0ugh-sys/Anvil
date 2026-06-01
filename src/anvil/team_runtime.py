@@ -148,20 +148,21 @@ class TeamConfigStore:
             return updated
 
     def update_member_status(self, name: str, status: str) -> TeamConfig:
-        config = self.load()
-        members = []
-        found = False
-        for member in config.members:
-            if member.name == name:
-                members.append(TeamMember(name=member.name, role=member.role, status=status, metadata=member.metadata))
-                found = True
-            else:
-                members.append(member)
-        if not found:
-            raise ValueError(f'unknown teammate: {name}')
-        updated = TeamConfig(team_name=config.team_name, members=tuple(members))
-        self.save(updated)
-        return updated
+        with self._lock:
+            config = self.load()
+            members = []
+            found = False
+            for member in config.members:
+                if member.name == name:
+                    members.append(TeamMember(name=member.name, role=member.role, status=status, metadata=member.metadata))
+                    found = True
+                else:
+                    members.append(member)
+            if not found:
+                raise ValueError(f'unknown teammate: {name}')
+            updated = TeamConfig(team_name=config.team_name, members=tuple(members))
+            self._write_config(updated)
+            return updated
 
     def _write_config(self, config: TeamConfig) -> None:
         self.config_file.write_text(
@@ -409,59 +410,83 @@ class PersistentTeamRuntime:
         return next(iter(members.keys()), None)
 
     def _run_teammate_loop(self, spec: PersistentTeammateSpec, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            messages = self.inbox_store.drain(spec.name)
-            if not messages:
-                time.sleep(0.05)
-                continue
-            for message in messages:
-                if message.message_type == TeamMessageType.shutdown_request:
-                    self.config_store.update_member_status(spec.name, 'shutdown')
-                    if message.sender:
+        try:
+            while not stop_event.is_set():
+                messages = self.inbox_store.drain(spec.name)
+                if not messages:
+                    time.sleep(0.05)
+                    continue
+                for message in messages:
+                    if message.message_type == TeamMessageType.shutdown_request:
+                        self.config_store.update_member_status(spec.name, 'shutdown')
+                        if message.sender:
+                            self.inbox_store.send(
+                                TeamMessage(
+                                    id=uuid.uuid4().hex,
+                                    sender=spec.name,
+                                    recipient=message.sender,
+                                    message_type=TeamMessageType.shutdown_response,
+                                    body='shutdown accepted',
+                                    metadata={'approved': True},
+                                )
+                            )
+                        stop_event.set()
+                        break
+                    if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+                        continue
+                    self.config_store.update_member_status(spec.name, 'working')
+                    try:
+                        result = run_coding_agent(
+                            goal=message.body,
+                            decider=spec.decider,
+                            workspace_root=spec.workspace_root,
+                            stop=spec.stop,
+                            policy=spec.policy,
+                            skills=_load_skills(spec.skills),
+                        )
+                        task_id = str(message.metadata.get('task_id', '')).strip()
+                        if task_id:
+                            self._complete_task(task_id, spec.name, result.done, result)
                         self.inbox_store.send(
                             TeamMessage(
                                 id=uuid.uuid4().hex,
                                 sender=spec.name,
-                                recipient=message.sender,
-                                message_type=TeamMessageType.shutdown_response,
-                                body='shutdown accepted',
-                                metadata={'approved': True},
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.message,
+                                body=result.final_output,
+                                metadata={
+                                    'source_message_id': message.id,
+                                    'task_id': task_id,
+                                    'done': result.done,
+                                    'stop_reason': result.stop_reason.value,
+                                    'payload': run_result_to_dict(result, include_history=True),
+                                },
                             )
                         )
-                    stop_event.set()
-                    break
-                if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
-                    continue
-                self.config_store.update_member_status(spec.name, 'working')
-                result = run_coding_agent(
-                    goal=message.body,
-                    decider=spec.decider,
-                    workspace_root=spec.workspace_root,
-                    stop=spec.stop,
-                    policy=spec.policy,
-                    skills=_load_skills(spec.skills),
-                )
-                task_id = str(message.metadata.get('task_id', '')).strip()
-                if task_id:
-                    self._complete_task(task_id, spec.name, result.done, result)
-                self.inbox_store.send(
-                    TeamMessage(
-                        id=uuid.uuid4().hex,
-                        sender=spec.name,
-                        recipient=message.sender or 'lead',
-                        message_type=TeamMessageType.message,
-                        body=result.final_output,
-                        metadata={
-                            'source_message_id': message.id,
-                            'task_id': task_id,
-                            'done': result.done,
-                            'stop_reason': result.stop_reason.value,
-                            'payload': run_result_to_dict(result, include_history=True),
-                        },
-                    )
-                )
+                    except Exception as exc:
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.message,
+                                body=f'ERROR: {exc}',
+                                metadata={
+                                    'source_message_id': message.id,
+                                    'error': True,
+                                },
+                            )
+                        )
+                    finally:
+                        self.config_store.update_member_status(spec.name, 'idle')
+                    self.dispatch_ready_tasks(sender='scheduler')
+        except Exception:
+            # Last-resort: ensure status doesn't stay as 'working' if loop crashes
+            try:
                 self.config_store.update_member_status(spec.name, 'idle')
-                self.dispatch_ready_tasks(sender='scheduler')
+            except Exception:
+                pass
+            raise
 
     def _complete_task(self, task_id: str, teammate_name: str, done: bool, result: RunResult) -> None:
         with self._lock:

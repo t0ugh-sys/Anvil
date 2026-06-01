@@ -14,6 +14,10 @@ from ..skills import SkillLoader, list_skills
 from ..utils import resolve_goal
 
 
+__all__ = ['build_coding_decider', 'build_coding_summarizer', 'load_skills_from_args', 'run_code_command']
+
+
+
 def build_coding_prompt(
     *,
     goal: str,
@@ -103,8 +107,13 @@ def build_coding_prompt(
     )
 
 
-def build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = None):
-    invoke = build_invoke_from_args(args, mode='coding')
+def build_coding_decider(
+    args: argparse.Namespace,
+    skills: SkillLoader | None = None,
+    invoke_factory=None,
+):
+    factory = invoke_factory or build_invoke_from_args
+    invoke = factory(args, mode='coding')
 
     def decider(
         goal: str,
@@ -128,13 +137,14 @@ def build_coding_decider(args: argparse.Namespace, skills: SkillLoader | None = 
     return decider
 
 
-def build_coding_summarizer(args: argparse.Namespace) -> Optional[Any]:
+def build_coding_summarizer(args: argparse.Namespace, invoke_factory=None):
     from ..compression import TranscriptEntry
 
     if str(args.provider) == 'mock':
         return None
 
-    invoke = build_invoke_from_args(args, mode='coding')
+    factory = invoke_factory or build_invoke_from_args
+    invoke = factory(args, mode='coding')
 
     def summarizer(goal: str, previous_summary: str, transcript: Tuple[TranscriptEntry, ...]) -> str:
         transcript_lines = [entry.render_line()[:400] for entry in transcript[-16:]]
