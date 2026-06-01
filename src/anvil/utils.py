@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 from .core.types import ObserverFn
 
+__all__ = ['default_run_id', 'build_jsonl_observer', 'merge_observers', 'resolve_goal']
+
 
 def default_run_id() -> str:
     """Generate a default run ID from current UTC timestamp."""

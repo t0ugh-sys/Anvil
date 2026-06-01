@@ -3,6 +3,8 @@ from __future__ import annotations
 from ..skills import get_skill, list_skills
 from ..tools import build_default_tools, builtin_tool_specs
 
+__all__ = ['render_tools', 'render_skills']
+
 
 def render_tools(*, verbose: bool = False) -> str:
     specs = sorted(builtin_tool_specs(), key=lambda item: item.name)

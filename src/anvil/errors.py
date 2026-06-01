@@ -14,6 +14,8 @@ from typing import Any
 
 __all__ = ['AnvilError', 'ValidationError', 'AbortError', 'ShellError', 'ToolValidationError', 'is_abort_error', 'format_tool_error', 'format_error', 'validate_goal', 'validate_model', 'validate_temperature', 'validate_max_steps', 'validate_provider', 'validate_strategy']
 
+_VALID_PROVIDERS = frozenset({"mock", "openai_compatible", "anthropic", "gemini"})
+
 
 class AnvilError(Exception):
     """Base exception for Anvil."""
@@ -202,12 +204,10 @@ def validate_max_steps(max_steps: int) -> int:
 
 def validate_provider(provider: str) -> str:
     """Validate provider name."""
-    valid_providers = {"mock", "openai_compatible", "anthropic", "gemini"}
-
-    if provider not in valid_providers:
+    if provider not in _VALID_PROVIDERS:
         raise ValidationError(
-            f"Invalid provider. Must be one of: {', '.join(valid_providers)}",
-            {"field": "provider", "value": provider, "valid": list(valid_providers)}
+            f"Invalid provider. Must be one of: {', '.join(sorted(_VALID_PROVIDERS))}",
+            {"field": "provider", "value": provider, "valid": sorted(_VALID_PROVIDERS)}
         )
 
     return provider

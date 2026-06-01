@@ -4,6 +4,8 @@ from pathlib import Path
 
 from .event_viewer import render_event_stream
 
+__all__ = ['resolve_events_file', 'render_replay']
+
 
 def resolve_events_file(*, events_file: str, session_id: str, sessions_dir: str) -> Path:
     if session_id:

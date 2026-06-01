@@ -22,6 +22,29 @@ __all__ = ['AnvilAgent']
 StateT = TypeVar('StateT')
 
 
+def _build_result(
+    *,
+    final_output: str,
+    state: StateT,
+    done: bool,
+    steps: int,
+    elapsed_s: float,
+    history: List[str],
+    stop_reason: StopReason,
+    error: str | None = None,
+) -> RunResult[StateT]:
+    return RunResult(
+        final_output=final_output,
+        state=state,
+        done=done,
+        steps=steps,
+        elapsed_s=elapsed_s,
+        history=tuple(history),
+        stop_reason=stop_reason,
+        error=error,
+    )
+
+
 @dataclass(frozen=True)
 class AnvilAgent(Generic[StateT]):
     step: StepFn[StateT]
@@ -56,13 +79,9 @@ class AnvilAgent(Generic[StateT]):
         for step_index in range(self.stop.max_steps):
             if is_cancelled is not None and is_cancelled():
                 elapsed_s = monotonic_s() - started_at_s
-                run_result = RunResult(
-                    final_output=last_output,
-                    state=state,
-                    done=False,
-                    steps=step_index,
-                    elapsed_s=elapsed_s,
-                    history=tuple(history),
+                run_result = _build_result(
+                    final_output=last_output, state=state, done=False,
+                    steps=step_index, elapsed_s=elapsed_s, history=history,
                     stop_reason=StopReason.cancelled,
                 )
                 emit('stopped', {'reason': run_result.stop_reason.value, 'step': run_result.steps})
@@ -71,13 +90,9 @@ class AnvilAgent(Generic[StateT]):
             now_s = monotonic_s()
             elapsed_s = now_s - started_at_s
             if elapsed_s >= self.stop.max_elapsed_s:
-                run_result = RunResult(
-                    final_output=last_output,
-                    state=state,
-                    done=False,
-                    steps=step_index,
-                    elapsed_s=elapsed_s,
-                    history=tuple(history),
+                run_result = _build_result(
+                    final_output=last_output, state=state, done=False,
+                    steps=step_index, elapsed_s=elapsed_s, history=history,
                     stop_reason=StopReason.timeout,
                 )
                 emit('stopped', {'reason': run_result.stop_reason.value, 'step': run_result.steps})
@@ -107,15 +122,10 @@ class AnvilAgent(Generic[StateT]):
                 result: StepResult[StateT] = self.step(context)
             except Exception as exc:
                 error_elapsed_s = monotonic_s() - started_at_s
-                run_result = RunResult(
-                    final_output=last_output,
-                    state=state,
-                    done=False,
-                    steps=step_index,
-                    elapsed_s=error_elapsed_s,
-                    history=tuple(history),
-                    stop_reason=StopReason.step_error,
-                    error=str(exc),
+                run_result = _build_result(
+                    final_output=last_output, state=state, done=False,
+                    steps=step_index, elapsed_s=error_elapsed_s, history=history,
+                    stop_reason=StopReason.step_error, error=str(exc),
                 )
                 emit('step_failed', {'step': step_index, 'error': str(exc)})
                 emit('stopped', {'reason': run_result.stop_reason.value, 'step': run_result.steps, 'error': run_result.error})
@@ -136,26 +146,18 @@ class AnvilAgent(Generic[StateT]):
 
             if result.done:
                 done_elapsed_s = monotonic_s() - started_at_s
-                run_result = RunResult(
-                    final_output=last_output,
-                    state=state,
-                    done=True,
-                    steps=step_index + 1,
-                    elapsed_s=done_elapsed_s,
-                    history=tuple(history),
+                run_result = _build_result(
+                    final_output=last_output, state=state, done=True,
+                    steps=step_index + 1, elapsed_s=done_elapsed_s, history=history,
                     stop_reason=StopReason.done,
                 )
                 emit('stopped', {'reason': run_result.stop_reason.value, 'step': run_result.steps})
                 return run_result
 
         exhausted_elapsed_s = monotonic_s() - started_at_s
-        run_result = RunResult(
-            final_output=last_output,
-            state=state,
-            done=False,
-            steps=self.stop.max_steps,
-            elapsed_s=exhausted_elapsed_s,
-            history=tuple(history),
+        run_result = _build_result(
+            final_output=last_output, state=state, done=False,
+            steps=self.stop.max_steps, elapsed_s=exhausted_elapsed_s, history=history,
             stop_reason=StopReason.max_steps,
         )
         emit('stopped', {'reason': run_result.stop_reason.value, 'step': run_result.steps})
