@@ -30,6 +30,11 @@ from ..ui.chrome import (
     truncate,
 )
 
+__all__ = ['InteractiveRuntime']
+
+# Shared regex fragment for matching an absolute path prefix (e.g. C:\... or /...)
+_BASE_PATH_PATTERN = r'(?:[A-Za-z]:[\\/]|[\\/])[^,\uff0c]*?'
+
 
 TurnRunner = Callable[[str], str]
 T = TypeVar('T')
@@ -139,7 +144,7 @@ class InteractiveRuntime:
 
     def _create_directory_from_request(self, text: str) -> str | None:
         match = re.match(
-            r'^\s*(?:\u5728)?(?P<base>(?:[A-Za-z]:[\\/]|[\\/])[^,\uff0c]*?)\s*'
+            r'^\s*(?:\u5728)?(?P<base>' + _BASE_PATH_PATTERN + r')\s*'
             r'(?:\u65b0\u589e|\u521b\u5efa|\u65b0\u5efa)\s*(?:\u4e00\u4e2a)?'
             r'(?P<name>[^\\/:*?"<>|\s,\uff0c]+)\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)\s*$',
             text,
@@ -159,7 +164,7 @@ class InteractiveRuntime:
 
     def _create_blank_file_from_request(self, text: str) -> str | None:
         match = re.match(
-            r'^\s*(?:\u5728)?(?P<base>(?:[A-Za-z]:[\\/]|[\\/])[^,\uff0c]*?)\s*'
+            r'^\s*(?:\u5728)?(?P<base>' + _BASE_PATH_PATTERN + r')\s*'
             r'(?:\u65b0\u589e|\u521b\u5efa|\u65b0\u5efa)\s*(?:\u4e00\u4e2a)?'
             r'(?P<folder>[^\\/:*?"<>|\s,\uff0c]+)\s*(?:\u6587\u4ef6\u5939|\u76ee\u5f55)?'
             r'\s*(?:,|\uff0c|\u5e76|\u5e76\u4e14|\u7136\u540e|\u518d)*\s*'

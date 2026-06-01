@@ -11,6 +11,7 @@ from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
 from ..runtime import CodeRuntime
 from ..session import SessionStore
+from ..tool_use_loop import _looks_like_file_action
 from ..tools import builtin_tool_specs
 from .chat_runtime import InteractiveRuntime
 from .coding_runtime import build_coding_decider, build_coding_summarizer, load_skills_from_args
@@ -147,34 +148,7 @@ def _should_use_plain_chat_fallback(output: str) -> bool:
 
 
 def _looks_like_action_request(user_text: str) -> bool:
-    normalized = user_text.lower()
-    action_tokens = (
-        '\u65b0\u589e',
-        '\u521b\u5efa',
-        '\u65b0\u5efa',
-        '\u5199\u5165',
-        '\u5199\u5230',
-        '\u4fee\u6539',
-        '\u5220\u9664',
-        'create',
-        'write',
-        'edit',
-        'delete',
-    )
-    target_tokens = (
-        '\u6587\u4ef6',
-        '\u6587\u4ef6\u5939',
-        '\u76ee\u5f55',
-        '.txt',
-        '.md',
-        '.json',
-        'file',
-        'folder',
-        'directory',
-    )
-    return any(token in normalized for token in action_tokens) and any(
-        token in normalized for token in target_tokens
-    )
+    return _looks_like_file_action(user_text)
 
 
 def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
