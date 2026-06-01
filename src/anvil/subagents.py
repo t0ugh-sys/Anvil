@@ -14,7 +14,7 @@ from .task_graph import Task, TaskGraph, TaskStatus
 from .task_store import TaskStore
 from .worktree_manager import WorktreeManager
 
-__all__ = ['SubAgentResult', 'SubAgentPool']
+__all__ = ['SubAgentResult', 'SubAgentRuntime', 'SubAgentSpec']
 
 
 @dataclass(frozen=True)

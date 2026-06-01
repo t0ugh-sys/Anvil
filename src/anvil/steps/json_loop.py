@@ -14,7 +14,7 @@ class JsonLoopState:
     last_answer: str = ''
 
 
-__all__ = ['build_json_loop_prompt']
+__all__ = ['JsonLoopState', 'build_json_loop_prompt', 'make_json_decision_step']
 
 
 

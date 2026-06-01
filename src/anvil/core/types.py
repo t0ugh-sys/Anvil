@@ -7,6 +7,8 @@ from typing import Any, Callable, Dict, Generic, Optional, Tuple, TypeVar
 
 StateT = TypeVar('StateT')
 
+__all__ = ['StopReason', 'StopConfig', 'StepContext', 'StepResult', 'RunResult', 'ContextSnapshot']
+
 
 class StopReason(str, Enum):
     done = 'done'
@@ -67,8 +69,6 @@ class RunResult(Generic[StateT]):
 StepFn = Callable[[StepContext[StateT]], StepResult[StateT]]
 CancelFn = Callable[[], bool]
 ObserverFn = Callable[[str, Dict[str, Any]], None]
-
-__all__ = ['StopReason', 'StopConfig', 'StepContext', 'StepResult', 'RunResult', 'ContextSnapshot']
 
 
 @dataclass(frozen=True)

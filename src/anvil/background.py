@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple
 
 from .agent_protocol import ToolResult
 
-__all__ = ['BackgroundTaskManager']
+__all__ = ['BackgroundCommandRunner', 'BackgroundTaskInfo']
 
 
 @dataclass(frozen=True)
