@@ -195,31 +195,7 @@ class JsonlTeamInboxStore:
     def inbox_file(self, recipient: str) -> Path:
         return self.root_dir / f'{recipient}.jsonl'
 
-    def send(self, message: TeamMessage) -> None:
-        payload = message.to_dict()
-        with self._lock:
-            with self.inbox_file(message.recipient).open('a', encoding='utf-8') as file:
-                file.write(json.dumps(payload, ensure_ascii=False))
-                file.write('\n')
-
-    def drain(self, recipient: str) -> Tuple[TeamMessage, ...]:
-        path = self.inbox_file(recipient)
-        with self._lock:
-            if not path.exists():
-                return tuple()
-            rows = []
-            with path.open('r', encoding='utf-8') as file:
-                for line in file:
-                    text = line.strip()
-                    if not text:
-                        continue
-                    payload = json.loads(text)
-                    if isinstance(payload, dict):
-                        rows.append(TeamMessage.from_dict(payload))
-            path.write_text('', encoding='utf-8')
-        return tuple(rows)
-
-    def peek(self, recipient: str) -> Tuple[TeamMessage, ...]:
+    def _read_messages(self, recipient: str) -> Tuple[TeamMessage, ...]:
         path = self.inbox_file(recipient)
         if not path.exists():
             return tuple()
@@ -233,6 +209,24 @@ class JsonlTeamInboxStore:
                 if isinstance(payload, dict):
                     rows.append(TeamMessage.from_dict(payload))
         return tuple(rows)
+
+    def send(self, message: TeamMessage) -> None:
+        payload = message.to_dict()
+        with self._lock:
+            with self.inbox_file(message.recipient).open('a', encoding='utf-8') as file:
+                file.write(json.dumps(payload, ensure_ascii=False))
+                file.write('\n')
+
+    def drain(self, recipient: str) -> Tuple[TeamMessage, ...]:
+        with self._lock:
+            messages = self._read_messages(recipient)
+            path = self.inbox_file(recipient)
+            if path.exists():
+                path.write_text('', encoding='utf-8')
+        return messages
+
+    def peek(self, recipient: str) -> Tuple[TeamMessage, ...]:
+        return self._read_messages(recipient)
 
     def has_messages(self, recipient: str) -> bool:
         path = self.inbox_file(recipient)
