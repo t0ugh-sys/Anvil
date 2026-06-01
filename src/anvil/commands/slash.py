@@ -16,6 +16,8 @@ from ..services.session_renderer import (
 )
 from ..tool_spec import ToolSpec
 
+__all__ = ['SlashCommand', 'CommandResult', 'parse_slash_command', 'execute_slash_command']
+
 
 @dataclass(frozen=True)
 class SlashCommand:
@@ -114,7 +116,7 @@ def execute_slash_command(
     if command.name == 'panel':
         return CommandResult(output=format_session_panel(session_store))
     if command.name == 'resume':
-        return CommandResult(output=format_session_panel(session_store))
+        return CommandResult(output=format_session_panel(session_store, history_limit=10, event_limit=10))
     if command.name == 'exit':
         return CommandResult(output='bye', should_continue=False)
     return CommandResult(output=f'Unknown command: /{command.name}')
