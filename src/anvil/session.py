@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -379,6 +378,29 @@ class SessionStore:
                     comp = metadata.get('compression_state')
                     if isinstance(comp, dict):
                         state.last_summary = str(comp.get('summary', ''))
+                    tool_calls = metadata.get('tool_calls', [])
+                    tool_results = metadata.get('tool_results', [])
+                    call_names = {
+                        str(item.get('id')): str(item.get('name'))
+                        for item in tool_calls
+                        if isinstance(item, dict) and isinstance(item.get('id'), str)
+                    }
+                    for result in tool_results:
+                        if not isinstance(result, dict):
+                            continue
+                        call_id = str(result.get('id', ''))
+                        state.tool_history.append({
+                            'id': call_id,
+                            'name': call_names.get(call_id, ''),
+                            'ok': bool(result.get('ok', False)),
+                            'error': result.get('error'),
+                            'permission_decision': result.get('permission_decision'),
+                            'permission_reason': result.get('permission_reason'),
+                        })
+                        state.tool_history = state.tool_history[-MAX_TOOL_HISTORY:]
+                        mode = result.get('permission_decision')
+                        if isinstance(mode, str) and mode in state.permission_stats:
+                            state.permission_stats[mode] = state.permission_stats.get(mode, 0) + 1
 
             if event_name == 'run_finished':
                 state.status = 'completed' if payload.get('done') else 'stopped'

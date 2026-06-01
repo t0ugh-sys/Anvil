@@ -24,26 +24,14 @@ from .services.team_service import (
     run_team_shutdown_command as _team_service_run_team_shutdown_command,
 )
 from .ops.doctor import format_doctor_report, run_provider_doctor
-from .utils import default_run_id
 
 
 __all__ = ['build_parser', 'main']
-
-
-
-__all__ = ['build_parser', 'main']
-
 
 
 def _build_coding_decider(args: argparse.Namespace, skills=None):
     return _coding_runtime.build_coding_decider(
         args, skills, invoke_factory=build_invoke_from_args,
-    )
-
-
-def _build_coding_summarizer(args: argparse.Namespace):
-    return _coding_runtime.build_coding_summarizer(
-        args, invoke_factory=build_invoke_from_args,
     )
 
 

@@ -30,15 +30,25 @@ import json
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from enum import Enum
+from typing import Any, Dict, List, Sequence
 
 __all__ = [
     'HookEvent',
     'HookResult',
     'HookConfig',
     'HookManager',
+    'HookInput',
+    'HookOutput',
+    'run_hook',
+    'run_hooks_for_event',
+    'build_hook_input_for_tool',
 ]
+
+
+def _event_name(event: HookEvent | str) -> str:
+    """Extract event name string from HookEvent or plain string."""
+    return event.value if isinstance(event, HookEvent) else event
 
 
 class HookEvent(str, Enum):
@@ -204,7 +214,7 @@ class HookManager:
 
     def register(self, event: HookEvent | str, config: HookConfig) -> None:
         """Register a hook for an event."""
-        event_name = event.value if isinstance(event, HookEvent) else event
+        event_name = _event_name(event)
         with self._lock:
             if event_name not in self._hooks:
                 self._hooks[event_name] = []
@@ -223,7 +233,7 @@ class HookManager:
 
     def get_hooks(self, event: HookEvent | str) -> List[HookConfig]:
         """Get all hooks registered for an event."""
-        event_name = event.value if isinstance(event, HookEvent) else event
+        event_name = _event_name(event)
         with self._lock:
             return list(self._hooks.get(event_name, []))
 
@@ -240,7 +250,9 @@ class HookManager:
 
     def has_hooks(self, event: HookEvent | str) -> bool:
         """Check if any hooks are registered for an event."""
-        return len(self.get_hooks(event)) > 0
+        event_name = _event_name(event)
+        with self._lock:
+            return bool(self._hooks.get(event_name))
 
     def clear(self) -> None:
         """Remove all registered hooks."""
@@ -259,7 +271,7 @@ def build_hook_input_for_tool(
 ) -> HookInput:
     """Build HookInput for a tool-related event."""
     return HookInput(
-        event=event.value if isinstance(event, HookEvent) else event,
+        event=_event_name(event),
         tool_name=tool_name,
         tool_input=tool_input,
         tool_output=tool_output,

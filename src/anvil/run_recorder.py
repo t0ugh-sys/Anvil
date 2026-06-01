@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
+from .utils import default_run_id
 
 __all__ = ['RunRecorder']
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    return default_run_id()
 
 
 @dataclass(frozen=True)

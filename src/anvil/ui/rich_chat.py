@@ -57,7 +57,8 @@ except ImportError:
 
 
 def _utc_run_id() -> str:
-    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    from ..utils import default_run_id
+    return default_run_id()
 
 
 # ============== Config ==============

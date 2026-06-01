@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass, field
-from typing import Callable, Set, TypeVar
+from dataclasses import dataclass
+from typing import Callable, TypeVar
 
 T = TypeVar('T')
 
@@ -35,7 +35,7 @@ OVERLOAD_HTTP_CODE = 529
 MAX_CONSECUTIVE_OVERLOADS = 3
 
 
-__all__ = ['RetryExhausted', 'NonRetryableError', 'OverloadError', 'with_retry']
+__all__ = ['RetryExhausted', 'NonRetryableError', 'OverloadError', 'RetryState', 'compute_backoff', 'with_retry']
 
 
 
@@ -122,7 +122,7 @@ def with_retry(
     max_retries: int = DEFAULT_MAX_RETRIES,
     base_backoff_s: float = DEFAULT_BASE_BACKOFF_S,
     max_backoff_s: float = DEFAULT_MAX_BACKOFF_S,
-    retryable_codes: Set[int] | None = None,
+    retryable_codes: set[int] | None = None,
     state: RetryState | None = None,
     on_retry: Callable[[int, float], None] | None = None,
     get_status_code: Callable[[Exception], int | None],
@@ -177,7 +177,8 @@ def with_retry(
             # 529 overload: track consecutive failures
             is_overload = status == OVERLOAD_HTTP_CODE
             if is_overload:
-                state.record_overload(get_retry_after(exc))
+                retry_after_val = get_retry_after(exc)
+                state.record_overload(retry_after_val)
                 if state.consecutive_overloads >= MAX_CONSECUTIVE_OVERLOADS:
                     raise OverloadError(state.consecutive_overloads) from exc
 
@@ -192,11 +193,14 @@ def with_retry(
                 raise
 
             # Compute backoff
-            retry_after = get_retry_after(exc)
-            if retry_after is not None:
-                sleep_s = retry_after
+            if is_overload and retry_after_val is not None:
+                sleep_s = retry_after_val
             else:
-                sleep_s = compute_backoff(attempt, base_backoff_s, max_backoff_s)
+                retry_after = get_retry_after(exc)
+                if retry_after is not None:
+                    sleep_s = retry_after
+                else:
+                    sleep_s = compute_backoff(attempt, base_backoff_s, max_backoff_s)
 
             # Don't reset overload counter for 529 retries
             if not is_overload:
@@ -205,7 +209,5 @@ def with_retry(
                 on_retry(attempt, sleep_s)
             time.sleep(sleep_s)
 
-    # Should not reach here, but just in case
-    if last_error is not None:
-        raise last_error
-    raise ValueError('retry loop completed without result or error')
+    # Unreachable: the loop always returns or raises
+    raise RuntimeError('retry loop completed without result or error')  # pragma: no cover
