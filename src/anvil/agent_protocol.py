@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 __all__ = [
     'ToolCall',
+    'ToolResult',
     'AgentStep',
     'render_agent_step_schema',
     'parse_agent_step',
@@ -65,7 +66,7 @@ def parse_agent_step(raw: str) -> Optional[AgentStep ]:
     plan_raw = payload.get('plan', [])
     if not isinstance(plan_raw, list) or any(not isinstance(item, str) for item in plan_raw):
         return None
-    plan = [item for item in plan_raw]
+    plan = list(plan_raw)
 
     final = payload.get('final')
     if final is not None and not isinstance(final, str):

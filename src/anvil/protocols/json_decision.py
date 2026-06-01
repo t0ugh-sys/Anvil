@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+__all__ = ['JsonDecision', 'parse_json_decision']
+
 
 @dataclass(frozen=True)
 class JsonDecision:

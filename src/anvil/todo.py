@@ -3,8 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Tuple
 
+__all__ = ['TodoItem', 'TodoManager', 'TodoSnapshot', 'render_todo_lines']
 
 _VALID_TODO_STATUSES = {'pending', 'in_progress', 'completed'}
+_STATUS_MARKERS = {
+    'pending': '[ ]',
+    'in_progress': '[>]',
+    'completed': '[x]',
+}
 
 
 @dataclass(frozen=True)
@@ -70,12 +76,7 @@ class TodoManager:
 
 def render_todo_lines(items: Iterable[TodoItem]) -> List[str]:
     lines: List[str] = []
-    marker_map = {
-        'pending': '[ ]',
-        'in_progress': '[>]',
-        'completed': '[x]',
-    }
     for item in items:
-        marker = marker_map.get(item.status, '[ ]')
+        marker = _STATUS_MARKERS.get(item.status, '[ ]')
         lines.append(f'{marker} {item.id}: {item.content}')
     return lines
