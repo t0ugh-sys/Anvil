@@ -11,6 +11,8 @@ from ..tool_spec import ToolRisk, ToolSpec
 from ..todo import render_todo_lines
 from .base import ToolContext
 
+__all__ = ['analyze_memory_tool', 'todo_write_tool', 'load_skill_tool', 'compact_tool', 'memory_tool_specs']
+
 
 def analyze_memory_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Analyze past runs from memory store to learn patterns and insights.

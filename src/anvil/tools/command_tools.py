@@ -9,6 +9,8 @@ from ..policies import Capability
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import ToolContext
 
+__all__ = ['run_command_tool', 'run_command_async_tool', 'command_tool_specs']
+
 
 def run_command_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
     """Run a command in the workspace using shell=False mode for security.
