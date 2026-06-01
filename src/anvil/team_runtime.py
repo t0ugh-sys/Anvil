@@ -29,6 +29,12 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get('metadata', {})
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+
 class TeamMessageType(str, Enum):
     message = 'message'
     broadcast = 'broadcast'
@@ -67,7 +73,7 @@ class TeamMessage:
             message_type=TeamMessageType(str(payload.get('message_type', TeamMessageType.message.value)).strip()),
             body=str(payload.get('body', '')),
             created_at=str(payload.get('created_at', '')),
-            metadata=dict(payload.get('metadata', {})) if isinstance(payload.get('metadata', {}), dict) else {},
+            metadata=_parse_metadata(payload),
         )
 
 
@@ -92,7 +98,7 @@ class TeamMember:
             name=str(payload.get('name', '')).strip(),
             role=str(payload.get('role', '')).strip(),
             status=str(payload.get('status', 'idle')).strip() or 'idle',
-            metadata=dict(payload.get('metadata', {})) if isinstance(payload.get('metadata', {}), dict) else {},
+            metadata=_parse_metadata(payload),
         )
 
 
