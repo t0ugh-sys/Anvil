@@ -10,7 +10,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from .token_estimation import (
+    estimate_tokens as _estimate_tokens,
+    estimate_messages_tokens as _estimate_messages_tokens,
+)
 
 __all__ = [
     'CompactConfig',
@@ -139,7 +144,7 @@ class CompactState:
     archived_count: int = 0
     
     # 时间戳
-    last_compact_time: Optional[datetime] = None
+    last_compact_time: datetime | None = None
 
 
 @dataclass
@@ -151,7 +156,7 @@ class CompactResult:
     tokens_after: int
     messages: List[Dict[str, Any]] = field(default_factory=list)
     summary: str = ''
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -163,71 +168,10 @@ class MessageGroup:
 
 
 # ============== Token Estimation ==============
+# Re-export from token_estimation to avoid duplication
 
-# CJK Unified Ideographs and extensions
-_CJK_RANGES = (
-    (0x4E00, 0x9FFF),    # CJK Unified Ideographs
-    (0x3400, 0x4DBF),    # CJK Unified Ideographs Extension A
-    (0x20000, 0x2A6DF),  # CJK Unified Ideographs Extension B
-    (0x2A700, 0x2B73F),  # CJK Unified Ideographs Extension C
-    (0x2B740, 0x2B81F),  # CJK Unified Ideographs Extension D
-    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
-    (0x3000, 0x303F),    # CJK Symbols and Punctuation
-    (0xFF00, 0xFFEF),    # Halfwidth and Fullwidth Forms
-    (0x3040, 0x309F),    # Hiragana
-    (0x30A0, 0x30FF),    # Katakana
-    (0xAC00, 0xD7AF),    # Hangul Syllables
-)
-
-# Pre-built range objects for O(1) containment checks
-_CJK_RANGE_SET = tuple(range(start, end + 1) for start, end in _CJK_RANGES)
-
-
-def _is_cjk(char: str) -> bool:
-    """Check if a character is CJK (Chinese/Japanese/Korean).
-
-    Uses pre-built range objects for efficient O(1) lookup via ``in``.
-    """
-    code = ord(char)
-    return any(code in r for r in _CJK_RANGE_SET)
-
-
-def estimate_tokens(parts: Iterable[str]) -> int:
-    """Estimate token count with CJK-aware weighting.
-    
-    CJK characters typically tokenize to ~1.5-2 tokens each,
-    while ASCII characters average ~0.25 tokens (4 chars per token).
-    """
-    total = 0
-    for part in parts:
-        if not part:
-            continue
-        cjk_count = sum(1 for ch in part if _is_cjk(ch))
-        ascii_count = len(part) - cjk_count
-        # CJK: ~1.5 tokens per char, ASCII: ~0.25 tokens per char
-        total += int(cjk_count * 1.5 + ascii_count * 0.25)
-    return max(1, total) if total else 0
-
-
-def estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
-    """估算消息列表的 token 数量"""
-    total = 0
-    for msg in messages:
-        # 计算角色
-        total += estimate_tokens([msg.get('role', '')])
-        
-        # 计算内容
-        content = msg.get('content', '')
-        if isinstance(content, str):
-            total += estimate_tokens([content])
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    total += estimate_tokens([str(block.get('text', ''))])
-    
-    # 加上工具开销（估计）
-    total += len(messages) * MESSAGE_OVERHEAD_TOKENS
-    return total
+estimate_tokens = _estimate_tokens
+estimate_messages_tokens = _estimate_messages_tokens
 
 
 # ============== Micro Compression ==============
