@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from ..llm.providers import parse_provider_headers
 
+__all__ = ['HttpProbeResult', 'run_provider_doctor', 'format_doctor_report']
+
 
 @dataclass(frozen=True)
 class HttpProbeResult:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+__all__ = ['load_event_rows', 'render_event_row', 'render_event_stream']
+
 
 def load_event_rows(events_file: Path, *, limit: int | None = None) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
