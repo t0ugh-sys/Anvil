@@ -72,11 +72,11 @@ def _skills_docs_root() -> Path:
 
 
 def _skill_doc_path(name: str) -> Path:
-    return _skills_docs_root() / name / 'SKILL.md'
+    return _skill_doc_path_for_root(_skills_docs_root(), name)
 
 
 def _legacy_skill_doc_path(name: str) -> Path:
-    return _skills_docs_root() / f'{name}.md'
+    return _legacy_skill_doc_path_for_root(_skills_docs_root(), name)
 
 
 def _skill_doc_path_for_root(root: Path, name: str) -> Path:
@@ -113,15 +113,7 @@ def _parse_skill_frontmatter(raw: str) -> tuple[dict[str, str], str]:
 
 
 def _read_skill_doc(name: str) -> tuple[dict[str, str], str]:
-    path = _skill_doc_path(name)
-    if path.exists():
-        return _parse_skill_frontmatter(path.read_text(encoding='utf-8'))
-
-    legacy_path = _legacy_skill_doc_path(name)
-    if legacy_path.exists():
-        return _parse_skill_frontmatter(legacy_path.read_text(encoding='utf-8'))
-
-    return {}, ''
+    return _read_skill_doc_from_root(_skills_docs_root(), name)
 
 
 def _read_skill_doc_from_root(root: Path, name: str) -> tuple[dict[str, str], str]:

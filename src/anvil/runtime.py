@@ -91,8 +91,7 @@ class CodeRuntime:
                 base_dir=Path(self.args.runs_dir),
                 session_id=self.session_store.state.session_id,
             )
-            self.observers_artifact_dir = str(self.recorder.run_dir)
-            self.session_store.state.artifacts_dir = self.observers_artifact_dir
+            self.session_store.state.artifacts_dir = str(self.recorder.run_dir)
             self.session_store._write_session()
             observers.append(self.recorder.write_event)
         observers.append(self.memory_store.on_event)
@@ -141,6 +140,7 @@ class CodeRuntime:
         payload['permission_stats'] = dict(self.session_store.state.permission_stats)
         if self.recorder is not None:
             payload['run_dir'] = str(self.recorder.run_dir)
-            self.recorder.write_summary(run_result_to_dict(result, include_history=True))
+            full_payload = run_result_to_dict(result, include_history=True) if not self.args.include_history else payload
+            self.recorder.write_summary(full_payload)
         self.session_store.write_summary(payload)
         return payload
