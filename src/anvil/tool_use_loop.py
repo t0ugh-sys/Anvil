@@ -224,6 +224,31 @@ def _summarize_task_graph(graph: TaskGraph, *, task_store: TaskStore) -> Dict[st
     }
 
 
+def _extract_key_constraints(goal: str) -> List[str]:
+    """Extract key constraints from goal text to prevent context drift.
+
+    Uses simple heuristics to identify constraints, deadlines, version
+    requirements, and other important parameters that should be
+    force-injected into every decider call.
+    """
+    import re
+    constraints: List[str] = []
+    patterns = [
+        (r'(?:must|should|always|never|do not|don\'t)\s+.{10,80}', 'rule'),
+        (r'(?:Python|Node|Java|Go|Rust)\s+\d+\.\d+', 'version'),
+        (r'(?:deadline|by|before|until)\s+\w+\s+\d+', 'deadline'),
+        (r'(?:budget|limit|max|at most|no more than)\s+\d+', 'limit'),
+        (r'(?:file|path|dir|directory):\s*\S+', 'path'),
+    ]
+    for pattern, _category in patterns:
+        matches = re.findall(pattern, goal, re.IGNORECASE)
+        for m in matches[:2]:  # Cap at 2 per category
+            cleaned = m.strip()
+            if len(cleaned) > 10 and cleaned not in constraints:
+                constraints.append(cleaned)
+    return constraints[:8]  # Max 8 constraints total
+
+
 def _augment_state_summary(
     context: StepContext[ToolUseState],
     *,
@@ -263,6 +288,10 @@ def _augment_state_summary(
         summary['todo_reminder'] = reminder
     if skills is not None:
         summary['available_skills'] = skills.metadata()
+    # Extract key constraints from goal to prevent context drift
+    constraints = _extract_key_constraints(context.goal)
+    if constraints:
+        summary['key_constraints'] = constraints
     return summary
 
 

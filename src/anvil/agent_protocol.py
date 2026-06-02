@@ -100,6 +100,73 @@ def _load_first_json_object(text: str) -> Any:
             continue
         if isinstance(payload, dict):
             return payload
+
+    # Fallback: try regex extraction + repair for common LLM output issues
+    return _repair_and_parse_json(text)
+
+
+def _repair_and_parse_json(text: str) -> Any:
+    """Attempt to extract and repair malformed JSON from LLM output.
+
+    Handles common issues: trailing commas, single quotes, missing
+    closing brackets, and text wrapping around JSON.
+    """
+    import re
+
+    # Strategy 1: Extract {...} block via brace matching
+    start = text.find('{')
+    if start == -1:
+        return None
+
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i + 1]
+                result = _try_parse_repaired(candidate)
+                if result is not None:
+                    return result
+                break
+
+    # Strategy 2: Greedy regex for last-ditch extraction
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+    if match:
+        result = _try_parse_repaired(match.group())
+        if result is not None:
+            return result
+
+    return None
+
+
+def _try_parse_repaired(text: str) -> Any:
+    """Try parsing JSON with progressive repair strategies."""
+    # Attempt 1: raw parse
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 2: remove trailing commas before } or ]
+    import re
+    repaired = re.sub(r',\s*([}\]])', r'\1', text)
+    try:
+        obj = json.loads(repaired)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 3: replace single quotes with double quotes (crude but effective)
+    repaired = text.replace("'", '"')
+    try:
+        obj = json.loads(repaired)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+
     return None
 
 

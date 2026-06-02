@@ -247,6 +247,7 @@ class PersistentTeammateSpec:
     policy: ToolPolicy = ToolPolicy.allow_all()
     skills: Tuple[str, ...] = tuple()
     metadata: Dict[str, Any] = field(default_factory=dict)
+    max_consecutive_same_sender: int = 5  # Prevent ping-pong between agents
 
 
 class PersistentTeamRuntime:
@@ -415,6 +416,7 @@ class PersistentTeamRuntime:
         return next(iter(members.keys()), None)
 
     def _run_teammate_loop(self, spec: PersistentTeammateSpec, stop_event: threading.Event) -> None:
+        consecutive_from: Dict[str, int] = {}
         try:
             while not stop_event.is_set():
                 messages = self.inbox_store.drain(spec.name)
@@ -438,6 +440,27 @@ class PersistentTeamRuntime:
                         stop_event.set()
                         break
                     if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+                        continue
+                    # Ping-pong detection: track consecutive messages from same sender
+                    sender = message.sender or 'unknown'
+                    consecutive_from[sender] = consecutive_from.get(sender, 0) + 1
+                    # Reset all other senders
+                    for s in list(consecutive_from):
+                        if s != sender:
+                            consecutive_from[s] = 0
+                    if consecutive_from[sender] > spec.max_consecutive_same_sender:
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=sender,
+                                message_type=TeamMessageType.message,
+                                body=f'PING-PONG LIMIT: {spec.max_consecutive_same_sender} consecutive messages from {sender}. '
+                                     f'Stopping interaction to prevent infinite loop. Please consolidate your requests.',
+                                metadata={'ping_pong_limit': True, 'source_message_id': message.id},
+                            )
+                        )
+                        consecutive_from[sender] = 0
                         continue
                     self.config_store.update_member_status(spec.name, 'working')
                     try:

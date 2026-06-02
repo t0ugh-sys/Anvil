@@ -30,6 +30,14 @@ def write_file_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
     call_id = str(args.get('id', 'write_file'))
     try:
         target = resolve_inside_workspace(context.workspace_root, path)
+        if context.dry_run:
+            exists = target.exists()
+            current = target.read_text(encoding='utf-8')[:2000] if exists else '(file does not exist)'
+            return ToolResult(
+                id=call_id, ok=True,
+                output=f'[DRY RUN] Would write {len(content)} chars to {path}\n'
+                       f'Current content ({len(current)} chars): {current[:500]}',
+            )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding='utf-8')
         return ToolResult(id=call_id, ok=True, output='ok')
@@ -140,6 +148,9 @@ def apply_patch_tool(context: ToolContext, args: Dict[str, object]) -> ToolResul
                 add_lines = [line[1:] for line in body if line.startswith('+')]
                 if len(add_lines) != len(body):
                     raise ValueError('add file section only supports + lines')
+                if context.dry_run:
+                    changed.append(f'[DRY RUN] Would add {target.relative_to(root).as_posix()} ({len(add_lines)} lines)')
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text('\n'.join(add_lines), encoding='utf-8')
                 changed.append(target.relative_to(root).as_posix())
@@ -147,6 +158,9 @@ def apply_patch_tool(context: ToolContext, args: Dict[str, object]) -> ToolResul
 
             if header.startswith('*** Delete File:'):
                 target = _resolve_patch_target(context, header)
+                if context.dry_run:
+                    changed.append(f'[DRY RUN] Would delete {target.relative_to(root).as_posix()}')
+                    continue
                 if target.exists():
                     target.unlink()
                 changed.append(target.relative_to(root).as_posix())
@@ -158,6 +172,10 @@ def apply_patch_tool(context: ToolContext, args: Dict[str, object]) -> ToolResul
                     raise ValueError(f'file not found: {target}')
                 original = target.read_text(encoding='utf-8')
                 updated = _apply_update_hunks(original, body)
+                if context.dry_run:
+                    diff_lines = sum(1 for line in body if line.startswith('+') or line.startswith('-'))
+                    changed.append(f'[DRY RUN] Would update {target.relative_to(root).as_posix()} ({diff_lines} diff lines)')
+                    continue
                 target.write_text(updated, encoding='utf-8')
                 changed.append(target.relative_to(root).as_posix())
                 continue
