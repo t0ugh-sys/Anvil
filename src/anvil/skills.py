@@ -71,14 +71,6 @@ def _skills_docs_root() -> Path:
     return Path(__file__).resolve().parents[2] / 'skills'
 
 
-def _skill_doc_path(name: str) -> Path:
-    return _skill_doc_path_for_root(_skills_docs_root(), name)
-
-
-def _legacy_skill_doc_path(name: str) -> Path:
-    return _legacy_skill_doc_path_for_root(_skills_docs_root(), name)
-
-
 def _skill_doc_path_for_root(root: Path, name: str) -> Path:
     return root / name / 'SKILL.md'
 

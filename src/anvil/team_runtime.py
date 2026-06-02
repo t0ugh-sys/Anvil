@@ -40,7 +40,6 @@ class TeamMessageType(str, Enum):
     broadcast = 'broadcast'
     shutdown_request = 'shutdown_request'
     shutdown_response = 'shutdown_response'
-    plan_approval_response = 'plan_approval_response'
 
 
 @dataclass(frozen=True)
