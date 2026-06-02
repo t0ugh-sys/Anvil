@@ -16,7 +16,8 @@ from .compression import (
     summarize_entries_deterministically,
 )
 from .core.types import StepContext, StepResult
-from .policies import ToolPolicy
+from .policies import ToolPolicy, LoopDetector
+from .hooks import HookEvent, HookManager, HookInput, HookResult, build_hook_input_for_tool
 from .task_graph import TaskGraph, TaskStatus
 from .task_store import TaskStore
 from .todo import TodoItem, TodoManager, TodoSnapshot, render_todo_lines
@@ -34,6 +35,7 @@ __all__ = [
     'build_tool_dispatch',
     'execute_tool_use_round',
     'make_tool_use_step',
+    '_build_reflection',
 ]
 
 
@@ -131,6 +133,22 @@ def _has_successful_file_mutation(state: ToolUseState) -> bool:
         and entry.tool_name in mutating_tools
         for entry in state.transcript
     )
+
+
+def _build_reflection(tool_results: List[ToolResult]) -> str:
+    """Build a Reflexion-style self-critique after tool failures.
+
+    Returns a short prompt injected into state_summary so the decider
+    can learn from errors without re-reading raw tool output.
+    """
+    errors = [r for r in tool_results if not r.ok]
+    if not errors:
+        return ''
+    lines = ['REFLECTION: The last round had tool failures.']
+    for e in errors:
+        lines.append(f'- [{e.id}] {e.error or "unknown error"}')
+    lines.append('Consider: What went wrong? What should you try differently?')
+    return '\n'.join(lines)
 
 
 def _build_todo_state_summary(
@@ -253,10 +271,61 @@ def _dispatch_tool_calls(
     tool_context: ToolContext,
     dispatch_map: ToolDispatchMap,
     tool_calls,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
+    session_id: str = '',
+    workspace_root: str = '',
 ) -> List[ToolResult]:
     executed: List[ToolResult] = []
     for tool_call in tool_calls:
-        executed.append(execute_tool_call(tool_context, tool_call, dispatch_map))
+        # --- Loop detection ---
+        if loop_detector is not None:
+            loop_msg = loop_detector.check(tool_call.name, tool_call.arguments)
+            if loop_msg:
+                executed.append(ToolResult(
+                    id=tool_call.id, ok=False, output='', error=loop_msg,
+                ))
+                continue
+
+        # --- PreToolUse hook ---
+        if hook_manager is not None and hook_manager.has_hooks(HookEvent.PreToolUse):
+            hook_input = build_hook_input_for_tool(
+                HookEvent.PreToolUse,
+                tool_call.name,
+                tool_call.arguments,
+                session_id=session_id,
+                workspace_root=workspace_root,
+            )
+            hook_result = hook_manager.run_event(HookEvent.PreToolUse, hook_input)
+            if not hook_result.approved:
+                executed.append(ToolResult(
+                    id=tool_call.id, ok=False, output='',
+                    error=f'blocked by hook: {hook_result.error}',
+                ))
+                continue
+            # Apply modified input from hook if provided
+            if hook_result.modified_input:
+                tool_call = type(tool_call)(
+                    id=tool_call.id,
+                    name=tool_call.name,
+                    arguments=hook_result.modified_input,
+                )
+
+        result = execute_tool_call(tool_context, tool_call, dispatch_map)
+
+        # --- PostToolUse hook ---
+        if hook_manager is not None and hook_manager.has_hooks(HookEvent.PostToolUse):
+            post_input = build_hook_input_for_tool(
+                HookEvent.PostToolUse,
+                tool_call.name,
+                tool_call.arguments,
+                tool_output=result.output if result.ok else (result.error or ''),
+                session_id=session_id,
+                workspace_root=workspace_root,
+            )
+            hook_manager.run_event(HookEvent.PostToolUse, post_input)
+
+        executed.append(result)
     return executed
 
 
@@ -310,11 +379,13 @@ def _build_round_metadata(
     context: StepContext[ToolUseState],
     state_summary: Dict[str, object],
     thought: str,
-    plan,
+    plan: str,
     tool_calls,
     tool_results: List[ToolResult],
 ) -> Dict[str, object]:
+    has_tool_calls = len(tool_calls) > 0
     return {
+        'has_tool_calls': has_tool_calls,
         'thought': thought,
         'plan': plan,
         'tool_calls': [
@@ -384,6 +455,8 @@ def _compact_state_if_needed(
         reason = compact_manager.reason or 'manual'
     elif estimated_tokens > compression_config.max_context_tokens:
         reason = f'auto:{estimated_tokens}>{compression_config.max_context_tokens}'
+    elif estimated_tokens > compression_config.max_context_tokens * compression_config.warn_tokens_percent:
+        reason = f'auto:warn:{estimated_tokens}>{int(compression_config.warn_tokens_percent * 100)}%'
 
     if not reason:
         return next_state
@@ -430,6 +503,8 @@ def execute_tool_use_round(
     compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
 ) -> StepResult[ToolUseState]:
     config = compression_config or CompactConfig()
     config.validate()
@@ -455,6 +530,13 @@ def execute_tool_use_round(
         background_runner=background_runner,
     )
     augmented_state_summary.setdefault('workspace', {'root': str(tool_context.workspace_root)})
+    # Inject Reflexion: self-critique after tool failures
+    reflection = _build_reflection(list(effective_state.tool_results))
+    if reflection:
+        augmented_state_summary['reflection'] = reflection
+    # Inject loop detector advisory if needed
+    if loop_detector is not None:
+        augmented_state_summary['loop_detector'] = {'max_repeats': loop_detector.max_repeats}
     todo_manager = TodoManager(
         TodoSnapshot(
             items=effective_state.todos,
@@ -484,6 +566,10 @@ def execute_tool_use_round(
         tool_context=tool_context,
         dispatch_map=dispatch_map,
         tool_calls=parsed.tool_calls,
+        hook_manager=hook_manager,
+        loop_detector=loop_detector,
+        session_id=str(tool_context.workspace_root),
+        workspace_root=str(tool_context.workspace_root),
     )
     updated_history = _append_tool_history(
         history=effective_state.history,
@@ -572,6 +658,8 @@ def make_tool_use_step(
     compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
 ) -> Callable[[StepContext[ToolUseState]], StepResult[ToolUseState]]:
     dispatch_map = build_tool_dispatch(skills=skills, extra_tools=extra_tools)
     tool_context = ToolContext(
@@ -592,6 +680,8 @@ def make_tool_use_step(
             compression_config=compression_config,
             transcripts_dir=transcripts_dir,
             summarizer=summarizer,
+            hook_manager=hook_manager,
+            loop_detector=loop_detector,
         )
 
     return step

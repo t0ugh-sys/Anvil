@@ -33,6 +33,8 @@ class BackgroundCommandRunner:
         self._counter = 0
         self._tasks: Dict[str, BackgroundTaskInfo] = {}
         self._notifications: Queue[ToolResult] = Queue()
+        self._processes: Dict[str, subprocess.Popen] = {}
+        self._output_buffers: Dict[str, List[str]] = {}
 
     def spawn(self, *, command: List[str], call_id: str) -> ToolResult:
         normalized = [str(item) for item in command if str(item)]
@@ -59,17 +61,28 @@ class BackgroundCommandRunner:
 
     def _run_task(self, task_id: str, call_id: str, command: List[str]) -> None:
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 command,
                 cwd=str(self.workspace_root),
                 shell=False,
-                check=False,
                 text=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 encoding='utf-8',
                 errors='replace',
             )
-            merged = (proc.stdout or '') + (proc.stderr or '')
+            with self._lock:
+                self._processes[task_id] = proc
+                self._output_buffers[task_id] = []
+            # Stream output line by line
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                with self._lock:
+                    buf = self._output_buffers.get(task_id)
+                    if buf is not None:
+                        buf.append(line)
+            proc.wait()
+            merged = ''.join(self._output_buffers.get(task_id, []))
             ok = proc.returncode == 0
             result = ToolResult(
                 id=call_id,
@@ -105,3 +118,23 @@ class BackgroundCommandRunner:
     def snapshot(self) -> Tuple[BackgroundTaskInfo, ...]:
         with self._lock:
             return tuple(self._tasks.values())
+
+    def read_output(self, task_id: str, tail: int = 50) -> str:
+        """Read the latest output lines from a running or completed task."""
+        with self._lock:
+            buf = self._output_buffers.get(task_id)
+            if buf is None:
+                return ''
+            return ''.join(buf[-tail:])
+
+    def kill_task(self, task_id: str) -> bool:
+        """Kill a running background process. Returns True if killed."""
+        with self._lock:
+            proc = self._processes.get(task_id)
+            if proc is None:
+                return False
+            try:
+                proc.terminate()
+                return True
+            except OSError:
+                return False
