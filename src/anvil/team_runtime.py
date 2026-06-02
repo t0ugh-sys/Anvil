@@ -40,6 +40,8 @@ class TeamMessageType(str, Enum):
     broadcast = 'broadcast'
     shutdown_request = 'shutdown_request'
     shutdown_response = 'shutdown_response'
+    plan_approval_request = 'plan_approval_request'
+    plan_approval_response = 'plan_approval_response'
 
 
 @dataclass(frozen=True)
@@ -327,6 +329,63 @@ class PersistentTeamRuntime:
             message_type=TeamMessageType.shutdown_request,
         )
 
+    def request_plan_approval(
+        self,
+        recipient: str,
+        plan: str,
+        *,
+        sender: str = 'lead',
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Send a plan approval request to a teammate.
+
+        The teammate should respond with plan_approval_response,
+        including approve=True/False and optional feedback.
+        """
+        self.send_message(
+            recipient,
+            plan,
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_request,
+            metadata=metadata or {},
+        )
+
+    def approve_plan(
+        self,
+        recipient: str,
+        request_id: str,
+        *,
+        sender: str,
+        feedback: str = '',
+    ) -> None:
+        """Send plan approval response (approved)."""
+        self.send_message(
+            recipient,
+            'plan approved' + (f': {feedback}' if feedback else ''),
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_response,
+            metadata={'request_id': request_id, 'approved': True, 'feedback': feedback},
+        )
+
+    def reject_plan(
+        self,
+        recipient: str,
+        request_id: str,
+        *,
+        sender: str,
+        feedback: str,
+    ) -> None:
+        """Send plan rejection response (must include feedback)."""
+        if not feedback.strip():
+            raise ValueError('feedback is required when rejecting a plan')
+        self.send_message(
+            recipient,
+            f'plan rejected: {feedback}',
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_response,
+            metadata={'request_id': request_id, 'approved': False, 'feedback': feedback},
+        )
+
     def shutdown_all(self, *, sender: str = 'lead', timeout_s: float = 5.0) -> None:
         for name in list(self._threads.keys()):
             self.shutdown_teammate(name, sender=sender)
@@ -439,6 +498,26 @@ class PersistentTeamRuntime:
                             )
                         stop_event.set()
                         break
+                    # Plan approval: teammate can approve/reject plans
+                    if message.message_type == TeamMessageType.plan_approval_request:
+                        # Auto-approve by default; real implementation would
+                        # delegate to the agent's decision logic or user input
+                        request_id = str(message.metadata.get('request_id', message.id))
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.plan_approval_response,
+                                body='plan approved',
+                                metadata={'request_id': request_id, 'approved': True},
+                            )
+                        )
+                        continue
+                    # Plan approval response: forward to the original requester
+                    if message.message_type == TeamMessageType.plan_approval_response:
+                        # Already handled by the requester — skip
+                        continue
                     if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
                         continue
                     # Ping-pong detection: track consecutive messages from same sender

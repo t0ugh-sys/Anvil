@@ -6,6 +6,7 @@ CompactManager - Multi-layer Context Compression
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
@@ -27,6 +28,7 @@ __all__ = [
     'estimate_tokens',
     'estimate_messages_tokens',
     'micro_compact_messages',
+    'time_based_micro_compact',
     'partial_compact_messages',
     'TranscriptEntry',
     'MessageGroup',
@@ -113,6 +115,7 @@ class TranscriptEntry:
     tool_name: str | None = None
     call_id: str | None = None
     ok: bool | None = None
+    created_at: float = 0.0  # Unix timestamp for time-based compaction
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -242,6 +245,60 @@ def micro_compact_messages(
         result.append({**msg, 'content': new_content})
     
     return result
+
+
+# ============== Time-based Microcompact ==============
+# Reference: Claude Code timeBasedMCConfig.ts
+# When user returns after a long gap (30-60 min), the server-side prompt cache
+# is almost certainly expired. Clear ALL old tool results aggressively.
+
+DEFAULT_GAP_THRESHOLD_S = 30 * 60  # 30 minutes
+
+
+def time_based_micro_compact(
+    entries: Tuple[TranscriptEntry, ...],
+    *,
+    now_s: float | None = None,
+    gap_threshold_s: float = DEFAULT_GAP_THRESHOLD_S,
+) -> Tuple[TranscriptEntry, ...]:
+    """Clear ALL old tool results if there's been a long inactivity gap.
+
+    Unlike count-based micro_compact which keeps recent N results,
+    this clears everything older than the gap threshold — because after
+    30+ minutes of inactivity the prompt cache is expired anyway,
+    so keeping old results provides no cache benefit and wastes context.
+    """
+    if not entries:
+        return entries
+
+    _now = now_s if now_s is not None else time.time()
+
+    # Find the most recent timestamp
+    latest_ts = max((e.created_at for e in entries if e.created_at > 0), default=0.0)
+    if latest_ts <= 0:
+        return entries  # No timestamps — skip
+
+    # Check if the gap exceeds threshold
+    gap = _now - latest_ts
+    if gap < gap_threshold_s:
+        return entries  # No significant gap
+
+    # Clear ALL tool results (not just old ones) — cache is expired
+    compacted: list[TranscriptEntry] = []
+    for entry in entries:
+        if entry.kind == 'tool_result':
+            tool_name = entry.tool_name or 'tool'
+            compacted.append(TranscriptEntry(
+                kind='tool_result',
+                content=f'[Previous: used {tool_name}] (cache expired after {int(gap)}s gap)',
+                tool_name=entry.tool_name,
+                call_id=entry.call_id,
+                ok=entry.ok,
+                created_at=entry.created_at,
+            ))
+        else:
+            compacted.append(entry)
+    return tuple(compacted)
 
 
 # ============== Grouping ==============

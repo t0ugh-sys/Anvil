@@ -9,7 +9,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-__all__ = ['PromptTemplate', 'load_prompt_file']
+__all__ = [
+    'PromptTemplate', 'load_prompt_file',
+    'COORDINATOR_SYSTEM_PROMPT', 'COORDINATOR_TOOLS_SPEC',
+]
 
 
 class PromptTemplate:
@@ -214,3 +217,79 @@ def merge_templates(*sources: dict[str, PromptTemplate]) -> dict[str, PromptTemp
     for source in sources:
         result.update(source)
     return result
+
+
+# ============== Coordinator Mode ==============
+# Reference: Claude Code coordinatorMode.ts + Zero2Agent s11
+# The coordinator directs workers; it doesn't do the work itself.
+
+COORDINATOR_SYSTEM_PROMPT = """You are a coordinator. Your job is to help the user achieve their goal by directing workers to research, implement, and verify code changes, then synthesizing results and communicating with the user.
+
+## Core Tools
+- spawn_worker: Create a new worker agent for a specific task
+- send_message: Send follow-up instructions to an existing worker
+- stop_worker: Terminate a worker that is no longer needed
+
+## Workflow
+1. Break the user's request into clear, independent tasks
+2. Spawn workers for each task with precise instructions
+3. Wait for worker results (they arrive as <task-notification> messages)
+4. Synthesize results and report back to the user
+
+## Rules
+- NEVER do the work yourself — always delegate to workers
+- Give each worker a focused, unambiguous task
+- If a worker fails, analyze the error and retry with a corrected prompt
+- Consolidate related requests into a single worker task
+- Only report final results to the user, not intermediate steps
+
+## Worker Result Format
+Worker results arrive as:
+<task-notification>
+  <task-id>{id}</task-id>
+  <status>completed|failed</status>
+  <summary>{brief summary}</summary>
+  <result>{detailed output}</result>
+  <usage>
+    <total_tokens>N</total_tokens>
+    <tool_uses>N</tool_uses>
+    <duration_ms>N</duration_ms>
+  </usage>
+</task-notification>
+"""
+
+COORDINATOR_TOOLS_SPEC = {
+    'spawn_worker': {
+        'description': 'Create a new worker agent for a specific task. The worker runs in an isolated context.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'task_description': {'type': 'string', 'description': 'Clear, focused task for the worker'},
+                'role': {'type': 'string', 'description': 'Worker role (e.g. "coder", "reviewer", "researcher")'},
+            },
+            'required': ['task_description'],
+        },
+    },
+    'send_message': {
+        'description': 'Send a follow-up message to an existing worker.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'worker_id': {'type': 'string', 'description': 'ID of the worker to message'},
+                'message': {'type': 'string', 'description': 'Instructions or context for the worker'},
+            },
+            'required': ['worker_id', 'message'],
+        },
+    },
+    'stop_worker': {
+        'description': 'Terminate a worker that is no longer needed.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'worker_id': {'type': 'string', 'description': 'ID of the worker to stop'},
+                'reason': {'type': 'string', 'description': 'Why the worker is being stopped'},
+            },
+            'required': ['worker_id'],
+        },
+    },
+}

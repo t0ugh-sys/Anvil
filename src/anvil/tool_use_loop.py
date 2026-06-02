@@ -14,6 +14,7 @@ from .compression import (
     estimate_tokens,
     micro_compact_entries,
     summarize_entries_deterministically,
+    time_based_micro_compact,
 )
 from .core.types import StepContext, StepResult
 from .policies import ToolPolicy, LoopDetector
@@ -444,9 +445,12 @@ def _append_transcript_entries(
     thought: str,
     tool_calls,
     tool_results: List[ToolResult],
+    now_s: float = 0.0,
 ) -> Tuple[TranscriptEntry, ...]:
+    import time as _time
+    _now = now_s if now_s > 0 else _time.time()
     entries = list(state.transcript)
-    entries.append(TranscriptEntry(kind='thought', content=thought))
+    entries.append(TranscriptEntry(kind='thought', content=thought, created_at=_now))
     for call, result in zip(tool_calls, tool_results):
         content = result.output if result.ok else (result.error or result.output or 'tool error')
         entries.append(
@@ -456,6 +460,7 @@ def _append_transcript_entries(
                 tool_name=call.name,
                 call_id=result.id,
                 ok=result.ok,
+                created_at=_now,
             )
         )
     return tuple(entries)
@@ -474,6 +479,8 @@ def _compact_state_if_needed(
         state.transcript,
         keep_last_results=compression_config.micro_keep_last_results,
     )
+    # Time-based microcompact: clear ALL tool results after long inactivity gap
+    compacted_transcript = time_based_micro_compact(compacted_transcript)
     next_state = state.replace(transcript=compacted_transcript)
 
     estimated_tokens = estimate_tokens(
