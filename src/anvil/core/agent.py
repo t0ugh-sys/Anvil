@@ -68,8 +68,9 @@ class AnvilAgent(Generic[StateT]):
                 return
             try:
                 observer(event, payload)
-            except Exception:
-                return
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning('observer callback failed: %s', exc)
 
         started_at_s = monotonic_s()
         state = initial_state

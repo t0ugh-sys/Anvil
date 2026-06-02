@@ -176,8 +176,8 @@ def gh_repo_list_tool(context: ToolContext, args: Dict[str, object]) -> ToolResu
 
     try:
         data = json.loads(proc.stdout or '[]')
-    except Exception:
-        return ToolResult(id=call_id, ok=True, output=output, error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output=proc.stdout or '', error=f'JSON parse error: {exc}')
 
     lines: List[str] = []
     for item in data:
@@ -295,8 +295,8 @@ def gh_issue_list_tool(context: ToolContext, args: Dict[str, object]) -> ToolRes
 
     try:
         data = json.loads(proc.stdout or '[]')
-    except Exception:
-        return ToolResult(id=call_id, ok=True, output=output, error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output=proc.stdout or '', error=f'JSON parse error: {exc}')
 
     lines: List[str] = []
     for item in data:
@@ -416,8 +416,8 @@ def gh_pr_list_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult
 
     try:
         data = json.loads(proc.stdout or '[]')
-    except Exception:
-        return ToolResult(id=call_id, ok=True, output=output, error=None)
+    except Exception as exc:
+        return ToolResult(id=call_id, ok=False, output=proc.stdout or '', error=f'JSON parse error: {exc}')
 
     lines: List[str] = []
     for item in data:

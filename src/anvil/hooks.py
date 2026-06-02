@@ -66,6 +66,7 @@ class HookConfig:
     command: str
     timeout_s: float = 30.0
     async_mode: bool = False
+    shell: bool = False
 
 
 @dataclass(frozen=True)
@@ -142,11 +143,17 @@ def run_hook(
     Sends hook_input as JSON via stdin, reads JSON output from stdout.
     Returns HookOutput with approval decision and optional modifications.
     """
+    import shlex
+
     timeout = timeout_s or config.timeout_s
     try:
+        # Default to shlex.split for safety; use shell=True only when explicitly requested.
+        cmd: str | list[str] = (
+            config.command if config.shell else shlex.split(config.command)
+        )
         result = subprocess.run(
-            config.command,
-            shell=True,
+            cmd,
+            shell=config.shell,
             input=hook_input.to_json(),
             capture_output=True,
             text=True,

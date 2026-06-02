@@ -99,7 +99,7 @@ class RunHookTests(unittest.TestCase):
         self.assertTrue(output.approve)
 
     def test_should_block_on_nonzero_exit(self) -> None:
-        config = HookConfig(command='exit 1')
+        config = HookConfig(command='exit 1', shell=True)
         inp = HookInput(event='PreToolUse')
         output = run_hook(config, inp, timeout_s=5)
         self.assertFalse(output.approve)

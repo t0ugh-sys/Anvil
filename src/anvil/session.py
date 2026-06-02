@@ -297,8 +297,9 @@ class SessionStore:
                     store._dirty = False
                     store._last_write_time = time.monotonic()
                     return store
-            except Exception:
-                pass  # Fall through to full load
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).debug('tail-window fast-path failed, falling back to full load: %s', exc)
 
         # Fallback: full load from session.json
         return cls.load(root_dir=root_dir, session_id=session_id)

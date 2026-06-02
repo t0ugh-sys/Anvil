@@ -46,9 +46,9 @@ __all__ = [
     # Functions
     'build_default_tools',
     'execute_tool_call',
+    'register_tool_handler',
     'builtin_tool_registrations',
     'builtin_tool_specs',
-    'builtin_tool_specs_map',
     # Individual tools
     'read_file_tool',
     'write_file_tool',
@@ -214,11 +214,6 @@ def builtin_tool_specs() -> list[ToolSpec]:
                 )
             )
     return specs
-
-
-def builtin_tool_specs_map() -> dict[str, ToolSpec]:
-    """Get a map of tool name to spec."""
-    return {item.name: item for item in builtin_tool_specs()}
 
 
 def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -> ToolResult:
