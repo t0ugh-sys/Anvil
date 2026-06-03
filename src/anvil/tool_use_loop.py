@@ -306,16 +306,27 @@ def _dispatch_tool_calls(
     loop_detector: LoopDetector | None = None,
     session_id: str = '',
     workspace_root: str = '',
+    parallel: bool = True,
 ) -> List[ToolResult]:
-    executed: List[ToolResult] = []
-    for tool_call in tool_calls:
+    """Dispatch tool calls, optionally executing independent tools in parallel.
+
+    When *parallel* is True (default), tools that pass hooks are executed
+    concurrently via a thread pool — matching pi-mono's Promise.all pattern.
+    Read-only tools (read_file, search, etc.) benefit most; mutating tools
+    still run but the GIL keeps them safe for file I/O.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Phase 1: Loop detection + PreToolUse hooks (sequential, per-tool)
+    ready: list[tuple[int, object, ToolResult | None]] = []  # (index, tool_call, pre_result_or_None)
+    for idx, tool_call in enumerate(tool_calls):
         # --- Loop detection ---
         if loop_detector is not None:
             loop_msg = loop_detector.check(tool_call.name, tool_call.arguments)
             if loop_msg:
-                executed.append(ToolResult(
+                ready.append((idx, tool_call, ToolResult(
                     id=tool_call.id, ok=False, output='', error=loop_msg,
-                ))
+                )))
                 continue
 
         # --- PreToolUse hook ---
@@ -329,10 +340,10 @@ def _dispatch_tool_calls(
             )
             hook_result = hook_manager.run_event(HookEvent.PreToolUse, hook_input)
             if not hook_result.approved:
-                executed.append(ToolResult(
+                ready.append((idx, tool_call, ToolResult(
                     id=tool_call.id, ok=False, output='',
                     error=f'blocked by hook: {hook_result.error}',
-                ))
+                )))
                 continue
             # Apply modified input from hook if provided
             if hook_result.modified_input:
@@ -342,7 +353,38 @@ def _dispatch_tool_calls(
                     arguments=hook_result.modified_input,
                 )
 
-        result = execute_tool_call(tool_context, tool_call, dispatch_map)
+        ready.append((idx, tool_call, None))  # None = needs execution
+
+    # Phase 2: Execute tools (parallel or sequential)
+    def _exec_one(tc):
+        return execute_tool_call(tool_context, tc, dispatch_map)
+
+    exec_indices = [i for i, (idx, tc, pre) in enumerate(ready) if pre is None]
+    results_by_pos: dict[int, ToolResult] = {}
+
+    if parallel and len(exec_indices) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(exec_indices), 8)) as pool:
+            futures = {
+                pool.submit(_exec_one, ready[i][1]): i
+                for i in exec_indices
+            }
+            for future in as_completed(futures):
+                pos = futures[future]
+                try:
+                    results_by_pos[pos] = future.result()
+                except Exception as exc:
+                    tc = ready[pos][1]
+                    results_by_pos[pos] = ToolResult(
+                        id=tc.id, ok=False, output='', error=f'parallel execution error: {exc}',
+                    )
+    else:
+        for i in exec_indices:
+            results_by_pos[i] = _exec_one(ready[i][1])
+
+    # Phase 3: Assemble results + PostToolUse hooks (sequential, per-tool)
+    executed: List[ToolResult] = []
+    for i, (idx, tool_call, pre_result) in enumerate(ready):
+        result = pre_result if pre_result is not None else results_by_pos[i]
 
         # --- PostToolUse hook ---
         if hook_manager is not None and hook_manager.has_hooks(HookEvent.PostToolUse):
