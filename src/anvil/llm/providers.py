@@ -194,6 +194,8 @@ def _anthropic_invoke_factory(
     debug: bool = False,
     enable_native_tools: bool = False,
     usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
@@ -210,6 +212,17 @@ def _anthropic_invoke_factory(
             'temperature': temperature,
             'messages': [{'role': 'user', 'content': request_prompt}],
         }
+        # Stop sequences — halt generation when encountered
+        if stop_sequences:
+            payload['stop_sequences'] = stop_sequences
+        # Extended thinking — enable Claude's internal reasoning
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            # Extended thinking requires temperature=1
+            payload['temperature'] = 1.0
         if (
             enable_native_tools
             and _prompt_requires_file_tool(prompt)
@@ -305,10 +318,17 @@ def _extract_anthropic_tool_use_json(response: dict) -> str:
 
     tool_calls: list[dict[str, object]] = []
     thoughts: list[str] = []
+    thinking_content: list[str] = []
     for block in content:
         if not isinstance(block, dict):
             continue
         block_type = block.get('type')
+        if block_type == 'thinking':
+            # Extended thinking block — capture reasoning
+            thinking_text = block.get('thinking', '')
+            if isinstance(thinking_text, str) and thinking_text.strip():
+                thinking_content.append(thinking_text.strip())
+            continue
         if block_type == 'text':
             text = block.get('text')
             if isinstance(text, str) and text.strip():
@@ -327,9 +347,11 @@ def _extract_anthropic_tool_use_json(response: dict) -> str:
 
     if not tool_calls:
         return ''
+    # Combine thinking and regular thoughts
+    all_thoughts = thinking_content + thoughts
     return json.dumps(
         {
-            'thought': '\n'.join(thoughts),
+            'thought': '\n'.join(all_thoughts),
             'plan': [],
             'tool_calls': tool_calls,
             'final': None,
@@ -583,6 +605,8 @@ def anthropic_invoke_factory(
     debug: bool = False,
     enable_native_tools: bool = False,
     usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
 ) -> InvokeFn:
     """Public wrapper for Anthropic provider with optional custom base_url."""
     return _anthropic_invoke_factory(
@@ -591,6 +615,8 @@ def anthropic_invoke_factory(
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
         debug=debug, enable_native_tools=enable_native_tools,
         usage_tracker=usage_tracker,
+        stop_sequences=stop_sequences,
+        thinking_budget_tokens=thinking_budget_tokens,
     )
 
 
