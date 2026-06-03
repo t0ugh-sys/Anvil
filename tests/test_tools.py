@@ -36,8 +36,9 @@ class ToolsTests(unittest.TestCase):
         self.assertIn('todo_write', names)
         self.assertIn('load_skill', names)
         self.assertIn('run_command_async', names)
-        self.assertIn('git_status', names)
-        self.assertIn('gh_issue_list', names)
+        # Git/GitHub tools use run_command instead (Zero2Agent: fewer tools = better)
+        self.assertNotIn('git_status', names)
+        self.assertNotIn('gh_issue_list', names)
         self.assertEqual(set(names), set(dispatch.keys()))
 
     def test_should_expose_builtin_tool_specs(self) -> None:

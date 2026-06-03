@@ -62,6 +62,8 @@ def build_coding_prompt(
         '- apply_patch: {"patch":"*** Begin Patch\\n...\\n*** End Patch"}\n'
         '- search: {"pattern":"literal text"}\n'
         '- run_command: {"cmd":["program","arg"]}\n'
+        '- run_command_async: {"cmd":["program","arg"]}; runs in background.\n'
+        'For git operations, use run_command with ["git", ...] or ["gh", ...].\n'
         'For a requested empty JSON file, call write_file with a .json path and content "".\n'
         'Use paths relative to the workspace unless the user supplies an absolute path inside the workspace.\n'
         'If the user asks for the current path, use StateSummary.workspace.root.\n'
