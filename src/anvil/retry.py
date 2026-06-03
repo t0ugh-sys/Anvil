@@ -12,8 +12,9 @@ Inspired by Claude Code's withRetry pattern:
 from __future__ import annotations
 
 import random
-import time
+import time as _time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable, TypeVar
 
 T = TypeVar('T')
@@ -35,7 +36,11 @@ OVERLOAD_HTTP_CODE = 529
 MAX_CONSECUTIVE_OVERLOADS = 3
 
 
-__all__ = ['RetryExhausted', 'NonRetryableError', 'OverloadError', 'RetryState', 'compute_backoff', 'with_retry']
+__all__ = [
+    'RetryExhausted', 'NonRetryableError', 'OverloadError',
+    'RetryState', 'compute_backoff', 'with_retry',
+    'CircuitBreaker', 'CircuitState', 'CircuitBreakerOpen',
+]
 
 
 
@@ -207,7 +212,131 @@ def with_retry(
                 state.record_retryable()
             if on_retry:
                 on_retry(attempt, sleep_s)
-            time.sleep(sleep_s)
+            _time.sleep(sleep_s)
 
     # Unreachable: the loop always returns or raises
     raise RuntimeError('retry loop completed without result or error')  # pragma: no cover
+
+
+# ============== Circuit Breaker ==============
+
+
+class CircuitState(Enum):
+    """Circuit breaker states."""
+    CLOSED = 'closed'       # Normal operation — requests pass through
+    OPEN = 'open'           # Failure threshold exceeded — fail fast
+    HALF_OPEN = 'half_open' # Recovery probe — allow one test request
+
+
+class CircuitBreakerOpen(Exception):
+    """Raised when circuit breaker is OPEN and request is rejected."""
+
+    def __init__(self, failures: int, recovery_after_s: float):
+        self.failures = failures
+        self.recovery_after_s = recovery_after_s
+        super().__init__(
+            f'Circuit breaker OPEN after {failures} failures. '
+            f'Will try again in {recovery_after_s:.0f}s.'
+        )
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern for API call protection.
+
+    Three states (inspired by Zero2Agent article #40):
+    - CLOSED: normal operation, all requests pass through
+    - OPEN: failure threshold exceeded, requests fail immediately
+    - HALF_OPEN: after recovery timeout, allow one probe request
+
+    Usage::
+
+        cb = CircuitBreaker(failure_threshold=5, recovery_timeout_s=60)
+        result = cb.call(lambda: api_request())
+
+    Integrates with retry: wrap ``with_retry`` inside ``cb.call`` for
+    combined exponential backoff + circuit breaker protection.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout_s: float = 60.0,
+        half_open_max_calls: int = 1,
+    ) -> None:
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout_s = recovery_timeout_s
+        self._half_open_max_calls = half_open_max_calls
+
+        self._state: CircuitState = CircuitState.CLOSED
+        self._failure_count: int = 0
+        self._success_count: int = 0
+        self._last_failure_time: float = 0.0
+        self._half_open_calls: int = 0
+
+    @property
+    def state(self) -> CircuitState:
+        """Current state, with automatic OPEN → HALF_OPEN transition."""
+        if self._state == CircuitState.OPEN:
+            if _time.time() - self._last_failure_time >= self._recovery_timeout_s:
+                self._state = CircuitState.HALF_OPEN
+                self._half_open_calls = 0
+        return self._state
+
+    @property
+    def failure_count(self) -> int:
+        return self._failure_count
+
+    def call(self, fn: Callable[[], T]) -> T:
+        """Execute fn through the circuit breaker.
+
+        Raises CircuitBreakerOpen if the circuit is OPEN.
+        """
+        current = self.state
+
+        if current == CircuitState.OPEN:
+            raise CircuitBreakerOpen(
+                failures=self._failure_count,
+                recovery_after_s=self._recovery_timeout_s,
+            )
+
+        if current == CircuitState.HALF_OPEN:
+            if self._half_open_calls >= self._half_open_max_calls:
+                raise CircuitBreakerOpen(
+                    failures=self._failure_count,
+                    recovery_after_s=self._recovery_timeout_s,
+                )
+            self._half_open_calls += 1
+
+        try:
+            result = fn()
+            self._on_success()
+            return result
+        except Exception:
+            self._on_failure()
+            raise
+
+    def _on_success(self) -> None:
+        """Record a successful call."""
+        if self._state == CircuitState.HALF_OPEN:
+            # Probe succeeded — close the circuit
+            self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count += 1
+
+    def _on_failure(self) -> None:
+        """Record a failed call."""
+        self._failure_count += 1
+        self._last_failure_time = _time.time()
+
+        if self._state == CircuitState.HALF_OPEN:
+            # Probe failed — reopen the circuit
+            self._state = CircuitState.OPEN
+        elif self._failure_count >= self._failure_threshold:
+            self._state = CircuitState.OPEN
+
+    def reset(self) -> None:
+        """Manually reset to CLOSED state."""
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._half_open_calls = 0

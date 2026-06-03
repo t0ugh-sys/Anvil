@@ -21,3 +21,4 @@ AGENTS.md
 *.log
 .npm-cache/
 .codex-pr-body.md
+tests/.tmp/

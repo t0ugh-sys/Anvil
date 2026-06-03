@@ -733,3 +733,191 @@ def archive_compacted_messages(
     )
     
     return path
+
+
+# ============== Importance Scoring ==============
+# Based on Zero2Agent article #20: Context Compression & Optimization
+# Hybrid scoring: score = w_recency * recency + w_relevance * relevance + w_importance * importance
+
+
+# Keywords that signal important content (decisions, commitments, facts)
+_DECISION_KEYWORDS = frozenset({
+    'decided', 'decision', 'chose', 'chosen', 'agreed', 'approved',
+    'confirmed', 'final', 'conclusion', 'resolved', 'must', 'shall',
+    'requirement', 'constraint', 'blocked', 'critical', 'priority',
+    '决定', '确认', '必须', '关键', '结论', '阻塞', '优先',
+})
+
+_QUESTION_KEYWORDS = frozenset({
+    '?', 'why', 'how', 'what', 'when', 'where', 'which',
+    'should', 'could', 'would',
+    '为什么', '怎么', '什么', '何时', '哪个', '是否',
+})
+
+_ERROR_KEYWORDS = frozenset({
+    'error', 'failed', 'failure', 'exception', 'traceback',
+    'bug', 'broken', 'crash', 'regression',
+    '错误', '失败', '异常', '崩溃',
+})
+
+
+def score_message_importance(
+    message: Dict[str, Any],
+    *,
+    position: int = 0,
+    total_messages: int = 1,
+    recency_weight: float = 0.4,
+    relevance_weight: float = 0.3,
+    importance_weight: float = 0.3,
+) -> float:
+    """Score a message's importance for context filtering.
+
+    Inspired by Zero2Agent hybrid scoring formula:
+        score = w_recency * recency + w_relevance * relevance + w_importance * importance
+
+    Args:
+        message: The message dict to score.
+        position: Index of this message in the list (0 = oldest).
+        total_messages: Total number of messages.
+        recency_weight: Weight for recency score.
+        relevance_weight: Weight for relevance score.
+        importance_weight: Weight for importance score.
+
+    Returns:
+        Score between 0.0 and 1.0.
+    """
+    # --- Recency score (newer = higher) ---
+    if total_messages > 1:
+        recency = position / (total_messages - 1)
+    else:
+        recency = 1.0
+
+    # --- Content importance score ---
+    content = _extract_text_content(message)
+    role = message.get('role', '')
+    content_lower = content.lower()
+
+    importance = 0.0
+
+    # System messages are always important
+    if role == 'system':
+        importance += 0.5
+
+    # User messages slightly more important than assistant
+    if role == 'user':
+        importance += 0.15
+    elif role == 'assistant':
+        importance += 0.1
+
+    # Decision keywords boost
+    decision_hits = sum(1 for kw in _DECISION_KEYWORDS if kw in content_lower)
+    importance += min(0.3, decision_hits * 0.1)
+
+    # Error messages are important for debugging
+    error_hits = sum(1 for kw in _ERROR_KEYWORDS if kw in content_lower)
+    importance += min(0.2, error_hits * 0.1)
+
+    # Questions are moderately important
+    question_hits = sum(1 for kw in _QUESTION_KEYWORDS if kw in content_lower)
+    importance += min(0.1, question_hits * 0.05)
+
+    # Tool results with errors are more important than successful ones
+    if role == 'tool':
+        is_error = message.get('is_error', False)
+        if is_error:
+            importance += 0.2
+
+    # Longer content tends to be more information-dense
+    if len(content) > 500:
+        importance += 0.1
+
+    importance = min(1.0, importance)
+
+    # --- Relevance score (heuristic: tool calls near the end are relevant) ---
+    # Without embeddings, use a simple heuristic: messages with tool_use
+    # blocks are operationally relevant
+    relevance = 0.0
+    if role == 'assistant':
+        tool_calls = message.get('tool_calls', [])
+        if tool_calls:
+            relevance += 0.3
+    if role == 'tool':
+        relevance += 0.2  # tool results are contextually relevant
+
+    # Combine scores
+    score = (
+        recency_weight * recency
+        + relevance_weight * relevance
+        + importance_weight * importance
+    )
+
+    return min(1.0, score)
+
+
+def _extract_text_content(message: Dict[str, Any]) -> str:
+    """Extract text content from a message (handles string and block formats)."""
+    content = message.get('content', '')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    parts.append(block.get('text', ''))
+                elif block.get('type') == 'tool_result':
+                    parts.append(str(block.get('content', '')))
+        return ' '.join(parts)
+    return str(content) if content else ''
+
+
+def filter_messages_by_importance(
+    messages: List[Dict[str, Any]],
+    *,
+    min_score: float = 0.2,
+    always_keep_recent: int = 6,
+    always_keep_system: bool = True,
+) -> List[Dict[str, Any]]:
+    """Filter messages by importance score, keeping the most relevant ones.
+
+    Always preserves:
+    - System messages (if always_keep_system=True)
+    - The most recent N messages (always_keep_recent)
+
+    Args:
+        messages: List of message dicts.
+        min_score: Minimum importance score to keep (0.0-1.0).
+        always_keep_recent: Number of recent messages to always keep.
+        always_keep_system: Whether to always keep system messages.
+
+    Returns:
+        Filtered list of messages, preserving order.
+    """
+    if not messages:
+        return messages
+
+    total = len(messages)
+
+    # Score all messages
+    scored = []
+    for i, msg in enumerate(messages):
+        score = score_message_importance(msg, position=i, total_messages=total)
+        scored.append((i, msg, score))
+
+    # Always keep system messages
+    keep_indices: set = set()
+    for i, msg, score in scored:
+        if always_keep_system and msg.get('role') == 'system':
+            keep_indices.add(i)
+
+    # Always keep recent messages
+    for i in range(max(0, total - always_keep_recent), total):
+        keep_indices.add(i)
+
+    # Keep messages above threshold
+    for i, msg, score in scored:
+        if score >= min_score:
+            keep_indices.add(i)
+
+    # Reconstruct in order
+    return [msg for i, msg, _ in scored if i in keep_indices]
