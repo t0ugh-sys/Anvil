@@ -163,7 +163,13 @@ _BLOCKED_URL_HOSTS = frozenset({
     'localhost',
     '127.0.0.1',
     '::1',
+    '0.0.0.0',
 })
+_BLOCKED_HOST_PREFIXES = ('127.', '10.', '192.168.', '172.16.', '172.17.',
+                          '172.18.', '172.19.', '172.20.', '172.21.',
+                          '172.22.', '172.23.', '172.24.', '172.25.',
+                          '172.26.', '172.27.', '172.28.', '172.29.',
+                          '172.30.', '172.31.')
 
 
 def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
@@ -184,6 +190,9 @@ def fetch_url_tool(context: ToolContext, args: Dict[str, object]) -> ToolResult:
             return ToolResult(id=call_id, ok=False, output='', error=f'blocked URL scheme: {parsed.scheme}')
         if parsed.hostname in _BLOCKED_URL_HOSTS:
             return ToolResult(id=call_id, ok=False, output='', error='blocked URL host')
+        hostname = parsed.hostname or ''
+        if any(hostname.startswith(prefix) for prefix in _BLOCKED_HOST_PREFIXES):
+            return ToolResult(id=call_id, ok=False, output='', error=f'blocked private/loopback host: {hostname}')
     except Exception:
         return ToolResult(id=call_id, ok=False, output='', error='invalid URL')
 

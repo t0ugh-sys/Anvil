@@ -27,6 +27,7 @@ Hook configuration (in settings):
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -66,6 +67,7 @@ class HookConfig:
     command: str
     timeout_s: float = 30.0
     async_mode: bool = False
+    shell: bool = False
 
 
 @dataclass(frozen=True)
@@ -144,9 +146,13 @@ def run_hook(
     """
     timeout = timeout_s or config.timeout_s
     try:
+        # Default to shlex.split for safety; use shell=True only when explicitly requested.
+        cmd: str | list[str] = (
+            config.command if config.shell else shlex.split(config.command)
+        )
         result = subprocess.run(
-            config.command,
-            shell=True,
+            cmd,
+            shell=config.shell,
             input=hook_input.to_json(),
             capture_output=True,
             text=True,

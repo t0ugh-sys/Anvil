@@ -223,28 +223,35 @@ class HybridTokenCounter:
     def __init__(self) -> None:
         self._last_usage: TokenUsage | None = None
         self._last_message_count: int = 0
+        self._last_total_chars: int = 0  # chars from last calibrated call
         self._chars_per_token: float = CHARS_PER_TOKEN_DEFAULT
 
-    def update_from_response(self, response: Dict[str, Any], message_count: int) -> None:
+    def update_from_response(
+        self,
+        response: Dict[str, Any],
+        message_count: int,
+        total_chars: int = 0,
+    ) -> None:
         """Update calibration from API response usage data."""
         usage = extract_usage(response)
         if usage.input_tokens > 0 and message_count > 0:
             self._last_usage = usage
             self._last_message_count = message_count
-            # Store chars-to-tokens ratio from this response
-            # (total_chars will be computed on next estimate_messages call)
+            self._last_total_chars = total_chars
 
     def estimate_messages(self, messages: List[Dict[str, Any]]) -> int:
         """Estimate tokens for messages, using API calibration if available."""
-        if self._last_usage is not None and self._last_message_count > 0:
+        if self._last_usage is not None and self._last_total_chars > 0:
             total_chars = sum(
                 len(json.dumps(msg, ensure_ascii=False)) if isinstance(msg.get('content'), list)
                 else len(str(msg.get('content', '')))
                 for msg in messages
             )
-            # Scale by ratio: last API input_tokens per message_count, adjusted for current message count
-            tokens_per_message = self._last_usage.input_tokens / self._last_message_count
-            return max(1, int(tokens_per_message * len(messages)))
+            if total_chars <= 0:
+                return 0
+            # Use calibrated chars-per-token ratio from last API response
+            chars_per_token = self._last_total_chars / self._last_usage.input_tokens
+            return max(1, int(total_chars / chars_per_token))
 
         # Fallback to heuristic
         return estimate_messages_tokens(messages)

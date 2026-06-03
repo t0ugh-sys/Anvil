@@ -48,6 +48,7 @@ class ToolContext:
     skill_loader: 'SkillLoader | None' = None
     compact_manager: CompactManager | None = None
     background_runner: BackgroundCommandRunner | None = None
+    dry_run: bool = False  # When True, write tools return preview without executing
 
 
 ToolFn = Callable[[ToolContext, Dict[str, object]], ToolResult]

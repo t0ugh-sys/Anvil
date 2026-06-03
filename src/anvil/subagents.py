@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -14,7 +15,51 @@ from .task_graph import Task, TaskGraph, TaskStatus
 from .task_store import TaskStore
 from .worktree_manager import WorktreeManager
 
-__all__ = ['SubAgentResult', 'SubAgentRuntime', 'SubAgentSpec']
+__all__ = ['SubAgentResult', 'SubAgentRuntime', 'SubAgentSpec', 'TaskNotification']
+
+
+@dataclass(frozen=True)
+class TaskNotification:
+    """Structured task notification — mirrors Claude Code's <task-notification> XML.
+
+    Wraps subagent results with usage stats for the parent agent.
+    """
+    task_id: str
+    agent_id: str
+    status: str  # 'completed' | 'failed' | 'killed'
+    summary: str
+    result: str
+    total_tokens: int = 0
+    tool_uses: int = 0
+    duration_ms: int = 0
+
+    def to_xml(self) -> str:
+        """Render as XML for injection into parent context."""
+        return (
+            f'<task-notification>\n'
+            f'  <task-id>{self.task_id}</task-id>\n'
+            f'  <status>{self.status}</status>\n'
+            f'  <summary>{self.summary}</summary>\n'
+            f'  <result>{self.result[:2000]}</result>\n'
+            f'  <usage>\n'
+            f'    <total_tokens>{self.total_tokens}</total_tokens>\n'
+            f'    <tool_uses>{self.tool_uses}</tool_uses>\n'
+            f'    <duration_ms>{self.duration_ms}</duration_ms>\n'
+            f'  </usage>\n'
+            f'</task-notification>'
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'task_id': self.task_id,
+            'agent_id': self.agent_id,
+            'status': self.status,
+            'summary': self.summary,
+            'result': self.result[:2000],
+            'total_tokens': self.total_tokens,
+            'tool_uses': self.tool_uses,
+            'duration_ms': self.duration_ms,
+        }
 
 
 @dataclass(frozen=True)
@@ -25,6 +70,7 @@ class SubAgentSpec:
     skills: Tuple[str, ...] = tuple()
     policy: ToolPolicy = ToolPolicy.allow_all()
     metadata: Dict[str, Any] = field(default_factory=dict)
+    model: str | None = None  # Model override (e.g. 'haiku' for fast tasks)
 
 
 @dataclass(frozen=True)
@@ -35,6 +81,22 @@ class SubAgentResult:
     stop_reason: str
     final_output: str
     payload: Dict[str, Any]
+    duration_ms: int = 0
+
+    def build_notification(self) -> TaskNotification:
+        """Build a structured TaskNotification from this result."""
+        status = 'completed' if self.success else 'failed'
+        history = self.payload.get('history', [])
+        tool_uses = sum(1 for h in history if isinstance(h, str) and h.startswith('tool['))
+        return TaskNotification(
+            task_id=self.task_id,
+            agent_id=self.agent_id,
+            status=status,
+            summary=f'Task {self.task_id} {status}: {self.stop_reason}',
+            result=self.final_output,
+            tool_uses=tool_uses,
+            duration_ms=self.duration_ms,
+        )
 
 
 class SubAgentRuntime:
@@ -119,6 +181,7 @@ class SubAgentRuntime:
                 isolation_mode=lease.mode if lease is not None else 'none',
             )
         )
+        start_ms = int(_time.time() * 1000)
         try:
             result = run_coding_agent(
                 goal=task.goal,
@@ -134,6 +197,7 @@ class SubAgentRuntime:
         finally:
             if lease is not None:
                 self.worktree_manager.cleanup(lease)
+        duration_ms = int(_time.time() * 1000) - start_ms
         payload = run_result_to_dict(result, include_history=True)
         if result.done:
             self.task_graph.mark_completed(
@@ -169,6 +233,7 @@ class SubAgentRuntime:
             stop_reason=result.stop_reason.value,
             final_output=result.final_output,
             payload=payload,
+            duration_ms=duration_ms,
         )
 
     def dispatch_ready_tasks(

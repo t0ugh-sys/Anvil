@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Dict, Generic, List, Optional, TypeVar
 
@@ -68,8 +69,8 @@ class AnvilAgent(Generic[StateT]):
                 return
             try:
                 observer(event, payload)
-            except Exception:
-                return
+            except Exception as exc:
+                logging.getLogger(__name__).warning('observer callback failed: %s', exc)
 
         started_at_s = monotonic_s()
         state = initial_state

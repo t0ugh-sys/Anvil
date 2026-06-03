@@ -1,0 +1,20 @@
+{
+  "session_id": "20260602T070045.764724+0000",
+  "workspace_root": ".",
+  "goal": "create file",
+  "status": "active",
+  "created_at": "2026-06-02T07:00:45.764724+00:00",
+  "updated_at": "2026-06-02T07:00:45.764724+00:00",
+  "history_tail": [],
+  "tool_history": [],
+  "todo_state": {},
+  "permission_cache": {},
+  "memory_run_dir": "tests\\.tmp\\runs",
+  "artifacts_dir": "",
+  "last_summary": "",
+  "permission_stats": {
+    "allow": 0,
+    "deny": 0,
+    "ask": 0
+  }
+}

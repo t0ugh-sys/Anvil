@@ -13,10 +13,6 @@ __all__ = [
 ]
 
 
-def _utc_now() -> str:
-    return utc_now_iso()
-
-
 @dataclass(frozen=True)
 class MailMessage:
     id: str
@@ -50,7 +46,7 @@ class JsonlMailbox:
     def send(self, message: MailMessage) -> None:
         payload = message.to_dict()
         if not payload['created_at']:
-            payload['created_at'] = _utc_now()
+            payload['created_at'] = utc_now_iso()
         with self._messages_file.open('a', encoding='utf-8') as file:
             file.write(json.dumps(payload, ensure_ascii=False))
             file.write('\n')

@@ -5,7 +5,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -16,6 +15,7 @@ from .core.types import RunResult, StopConfig
 from .policies import ToolPolicy
 from .skills import SkillLoader
 from .task_graph import Task, TaskGraph, TaskStatus
+from .run_schema import utc_now_iso
 from .task_store import TaskStore
 
 __all__ = [
@@ -23,10 +23,6 @@ __all__ = [
     'TeamConfigStore', 'JsonlTeamInboxStore',
     'PersistentTeammateSpec', 'PersistentTeamRuntime',
 ]
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -40,6 +36,7 @@ class TeamMessageType(str, Enum):
     broadcast = 'broadcast'
     shutdown_request = 'shutdown_request'
     shutdown_response = 'shutdown_response'
+    plan_approval_request = 'plan_approval_request'
     plan_approval_response = 'plan_approval_response'
 
 
@@ -60,7 +57,7 @@ class TeamMessage:
             'recipient': self.recipient,
             'message_type': self.message_type.value,
             'body': self.body,
-            'created_at': self.created_at or _utc_now(),
+            'created_at': self.created_at or utc_now_iso(),
             'metadata': dict(self.metadata),
         }
 
@@ -195,31 +192,7 @@ class JsonlTeamInboxStore:
     def inbox_file(self, recipient: str) -> Path:
         return self.root_dir / f'{recipient}.jsonl'
 
-    def send(self, message: TeamMessage) -> None:
-        payload = message.to_dict()
-        with self._lock:
-            with self.inbox_file(message.recipient).open('a', encoding='utf-8') as file:
-                file.write(json.dumps(payload, ensure_ascii=False))
-                file.write('\n')
-
-    def drain(self, recipient: str) -> Tuple[TeamMessage, ...]:
-        path = self.inbox_file(recipient)
-        with self._lock:
-            if not path.exists():
-                return tuple()
-            rows = []
-            with path.open('r', encoding='utf-8') as file:
-                for line in file:
-                    text = line.strip()
-                    if not text:
-                        continue
-                    payload = json.loads(text)
-                    if isinstance(payload, dict):
-                        rows.append(TeamMessage.from_dict(payload))
-            path.write_text('', encoding='utf-8')
-        return tuple(rows)
-
-    def peek(self, recipient: str) -> Tuple[TeamMessage, ...]:
+    def _read_messages(self, recipient: str) -> Tuple[TeamMessage, ...]:
         path = self.inbox_file(recipient)
         if not path.exists():
             return tuple()
@@ -233,6 +206,24 @@ class JsonlTeamInboxStore:
                 if isinstance(payload, dict):
                     rows.append(TeamMessage.from_dict(payload))
         return tuple(rows)
+
+    def send(self, message: TeamMessage) -> None:
+        payload = message.to_dict()
+        with self._lock:
+            with self.inbox_file(message.recipient).open('a', encoding='utf-8') as file:
+                file.write(json.dumps(payload, ensure_ascii=False))
+                file.write('\n')
+
+    def drain(self, recipient: str) -> Tuple[TeamMessage, ...]:
+        with self._lock:
+            messages = self._read_messages(recipient)
+            path = self.inbox_file(recipient)
+            if path.exists():
+                path.write_text('', encoding='utf-8')
+        return messages
+
+    def peek(self, recipient: str) -> Tuple[TeamMessage, ...]:
+        return self._read_messages(recipient)
 
     def has_messages(self, recipient: str) -> bool:
         path = self.inbox_file(recipient)
@@ -254,6 +245,7 @@ class PersistentTeammateSpec:
     policy: ToolPolicy = ToolPolicy.allow_all()
     skills: Tuple[str, ...] = tuple()
     metadata: Dict[str, Any] = field(default_factory=dict)
+    max_consecutive_same_sender: int = 5  # Prevent ping-pong between agents
 
 
 class PersistentTeamRuntime:
@@ -331,6 +323,63 @@ class PersistentTeamRuntime:
             'shutdown requested',
             sender=sender,
             message_type=TeamMessageType.shutdown_request,
+        )
+
+    def request_plan_approval(
+        self,
+        recipient: str,
+        plan: str,
+        *,
+        sender: str = 'lead',
+        metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        """Send a plan approval request to a teammate.
+
+        The teammate should respond with plan_approval_response,
+        including approve=True/False and optional feedback.
+        """
+        self.send_message(
+            recipient,
+            plan,
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_request,
+            metadata=metadata or {},
+        )
+
+    def approve_plan(
+        self,
+        recipient: str,
+        request_id: str,
+        *,
+        sender: str,
+        feedback: str = '',
+    ) -> None:
+        """Send plan approval response (approved)."""
+        self.send_message(
+            recipient,
+            'plan approved' + (f': {feedback}' if feedback else ''),
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_response,
+            metadata={'request_id': request_id, 'approved': True, 'feedback': feedback},
+        )
+
+    def reject_plan(
+        self,
+        recipient: str,
+        request_id: str,
+        *,
+        sender: str,
+        feedback: str,
+    ) -> None:
+        """Send plan rejection response (must include feedback)."""
+        if not feedback.strip():
+            raise ValueError('feedback is required when rejecting a plan')
+        self.send_message(
+            recipient,
+            f'plan rejected: {feedback}',
+            sender=sender,
+            message_type=TeamMessageType.plan_approval_response,
+            metadata={'request_id': request_id, 'approved': False, 'feedback': feedback},
         )
 
     def shutdown_all(self, *, sender: str = 'lead', timeout_s: float = 5.0) -> None:
@@ -422,6 +471,7 @@ class PersistentTeamRuntime:
         return next(iter(members.keys()), None)
 
     def _run_teammate_loop(self, spec: PersistentTeammateSpec, stop_event: threading.Event) -> None:
+        consecutive_from: Dict[str, int] = {}
         try:
             while not stop_event.is_set():
                 messages = self.inbox_store.drain(spec.name)
@@ -444,7 +494,48 @@ class PersistentTeamRuntime:
                             )
                         stop_event.set()
                         break
+                    # Plan approval: teammate can approve/reject plans
+                    if message.message_type == TeamMessageType.plan_approval_request:
+                        # Auto-approve by default; real implementation would
+                        # delegate to the agent's decision logic or user input
+                        request_id = str(message.metadata.get('request_id', message.id))
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.plan_approval_response,
+                                body='plan approved',
+                                metadata={'request_id': request_id, 'approved': True},
+                            )
+                        )
+                        continue
+                    # Plan approval response: forward to the original requester
+                    if message.message_type == TeamMessageType.plan_approval_response:
+                        # Already handled by the requester — skip
+                        continue
                     if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+                        continue
+                    # Ping-pong detection: track consecutive messages from same sender
+                    sender = message.sender or 'unknown'
+                    consecutive_from[sender] = consecutive_from.get(sender, 0) + 1
+                    # Reset all other senders
+                    for s in list(consecutive_from):
+                        if s != sender:
+                            consecutive_from[s] = 0
+                    if consecutive_from[sender] > spec.max_consecutive_same_sender:
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=sender,
+                                message_type=TeamMessageType.message,
+                                body=f'PING-PONG LIMIT: {spec.max_consecutive_same_sender} consecutive messages from {sender}. '
+                                     f'Stopping interaction to prevent infinite loop. Please consolidate your requests.',
+                                metadata={'ping_pong_limit': True, 'source_message_id': message.id},
+                            )
+                        )
+                        consecutive_from[sender] = 0
                         continue
                     self.config_store.update_member_status(spec.name, 'working')
                     try:

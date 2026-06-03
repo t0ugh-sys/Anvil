@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -165,34 +166,39 @@ class SessionStore:
         merged['permission_stats'] = dict(self.state.permission_stats)
         self.summary_file.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding='utf-8')
 
-    def _update_state_from_event(self, event: str, payload: Dict[str, Any]) -> None:
-        self.state.updated_at = utc_now_iso()
+    @staticmethod
+    def _apply_event_to_state(state: SessionState, event: str, payload: Dict[str, Any]) -> None:
+        """Apply an event's side-effects to *state* (no I/O).
+
+        Shared by :meth:`_update_state_from_event` (which also writes) and
+        :meth:`_rebuild_from_tail` (which only reconstructs in-memory).
+        """
         if event == 'run_started':
             goal = payload.get('goal')
             if isinstance(goal, str) and goal.strip():
-                self.state.goal = goal
-                self.state.status = 'active'
+                state.goal = goal
+                state.status = 'active'
         if event in {'chat_user', 'chat_assistant'}:
             content = payload.get('content')
             role = payload.get('role')
             if isinstance(content, str) and content:
                 prefix = f'{role}: ' if isinstance(role, str) and role else ''
-                self.state.history_tail.append(prefix + content)
-                self.state.history_tail = self.state.history_tail[-MAX_HISTORY_TAIL:]
-                self.state.status = 'active'
+                state.history_tail.append(prefix + content)
+                state.history_tail = state.history_tail[-MAX_HISTORY_TAIL:]
+                state.status = 'active'
         if event == 'step_succeeded':
             output = payload.get('output')
             if isinstance(output, str) and output:
-                self.state.history_tail.append(output)
-                self.state.history_tail = self.state.history_tail[-MAX_HISTORY_TAIL:]
+                state.history_tail.append(output)
+                state.history_tail = state.history_tail[-MAX_HISTORY_TAIL:]
             metadata = payload.get('metadata', {})
             if isinstance(metadata, dict):
                 todo_state = metadata.get('todo_state')
                 if isinstance(todo_state, dict):
-                    self.state.todo_state = dict(todo_state)
+                    state.todo_state = dict(todo_state)
                 compression_state = metadata.get('compression_state')
                 if isinstance(compression_state, dict):
-                    self.state.last_summary = str(compression_state.get('summary', self.state.last_summary))
+                    state.last_summary = str(compression_state.get('summary', state.last_summary))
                 tool_calls = metadata.get('tool_calls', [])
                 tool_results = metadata.get('tool_results', [])
                 call_names = {
@@ -204,7 +210,7 @@ class SessionStore:
                     if not isinstance(result, dict):
                         continue
                     call_id = str(result.get('id', ''))
-                    self.state.tool_history.append(
+                    state.tool_history.append(
                         {
                             'id': call_id,
                             'name': call_names.get(call_id, ''),
@@ -214,12 +220,16 @@ class SessionStore:
                             'permission_reason': result.get('permission_reason'),
                         }
                     )
-                    self.state.tool_history = self.state.tool_history[-MAX_TOOL_HISTORY:]
+                    state.tool_history = state.tool_history[-MAX_TOOL_HISTORY:]
                     mode = result.get('permission_decision')
-                    if isinstance(mode, str) and mode in self.state.permission_stats:
-                        self.state.permission_stats[mode] = self.state.permission_stats.get(mode, 0) + 1
+                    if isinstance(mode, str) and mode in state.permission_stats:
+                        state.permission_stats[mode] = state.permission_stats.get(mode, 0) + 1
         if event == 'run_finished':
-            self.state.status = 'completed' if payload.get('done') else 'stopped'
+            state.status = 'completed' if payload.get('done') else 'stopped'
+
+    def _update_state_from_event(self, event: str, payload: Dict[str, Any]) -> None:
+        self.state.updated_at = utc_now_iso()
+        self._apply_event_to_state(self.state, event, payload)
         self._write_session()
 
     def _extract_event_annotations(self, payload: Dict[str, Any]) -> tuple[str | None, str | None, str | None]:
@@ -297,8 +307,8 @@ class SessionStore:
                     store._dirty = False
                     store._last_write_time = time.monotonic()
                     return store
-            except Exception:
-                pass  # Fall through to full load
+            except Exception as exc:
+                logging.getLogger(__name__).debug('tail-window fast-path failed, falling back to full load: %s', exc)
 
         # Fallback: full load from session.json
         return cls.load(root_dir=root_dir, session_id=session_id)
@@ -350,59 +360,11 @@ class SessionStore:
             updated_at=now,
         )
 
-        for event in events:
-            event_name = event.get('event', '')
-            payload = event.get('payload', {})
+        for event_row in events:
+            event_name = event_row.get('event', '')
+            payload = event_row.get('payload', {})
             if not isinstance(payload, dict):
                 continue
-
-            if event_name == 'run_started':
-                goal = payload.get('goal')
-                if isinstance(goal, str):
-                    state.goal = goal
-
-            if event_name in {'chat_user', 'chat_assistant'}:
-                content = payload.get('content')
-                role = payload.get('role')
-                if isinstance(content, str) and content:
-                    prefix = f'{role}: ' if isinstance(role, str) and role else ''
-                    state.history_tail.append(prefix + content)
-                    state.history_tail = state.history_tail[-MAX_HISTORY_TAIL:]
-
-            if event_name == 'step_succeeded':
-                metadata = payload.get('metadata', {})
-                if isinstance(metadata, dict):
-                    todo = metadata.get('todo_state')
-                    if isinstance(todo, dict):
-                        state.todo_state = dict(todo)
-                    comp = metadata.get('compression_state')
-                    if isinstance(comp, dict):
-                        state.last_summary = str(comp.get('summary', ''))
-                    tool_calls = metadata.get('tool_calls', [])
-                    tool_results = metadata.get('tool_results', [])
-                    call_names = {
-                        str(item.get('id')): str(item.get('name'))
-                        for item in tool_calls
-                        if isinstance(item, dict) and isinstance(item.get('id'), str)
-                    }
-                    for result in tool_results:
-                        if not isinstance(result, dict):
-                            continue
-                        call_id = str(result.get('id', ''))
-                        state.tool_history.append({
-                            'id': call_id,
-                            'name': call_names.get(call_id, ''),
-                            'ok': bool(result.get('ok', False)),
-                            'error': result.get('error'),
-                            'permission_decision': result.get('permission_decision'),
-                            'permission_reason': result.get('permission_reason'),
-                        })
-                        state.tool_history = state.tool_history[-MAX_TOOL_HISTORY:]
-                        mode = result.get('permission_decision')
-                        if isinstance(mode, str) and mode in state.permission_stats:
-                            state.permission_stats[mode] = state.permission_stats.get(mode, 0) + 1
-
-            if event_name == 'run_finished':
-                state.status = 'completed' if payload.get('done') else 'stopped'
+            cls._apply_event_to_state(state, event_name, payload)
 
         return state
