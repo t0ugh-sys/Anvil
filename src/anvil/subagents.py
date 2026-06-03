@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -144,7 +145,6 @@ class SubAgentRuntime:
         decider: DeciderFn,
         stop: StopConfig | None = None,
     ) -> SubAgentResult:
-        import time as _time
         task = self.task_graph.get_task(task_id)
         self.task_graph.mark_running(task_id, metadata={'agent_id': spec.agent_id})
         self._persist_task_graph()

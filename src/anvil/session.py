@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -307,7 +308,6 @@ class SessionStore:
                     store._last_write_time = time.monotonic()
                     return store
             except Exception as exc:
-                import logging
                 logging.getLogger(__name__).debug('tail-window fast-path failed, falling back to full load: %s', exc)
 
         # Fallback: full load from session.json

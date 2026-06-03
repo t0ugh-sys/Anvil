@@ -5,7 +5,6 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -16,6 +15,7 @@ from .core.types import RunResult, StopConfig
 from .policies import ToolPolicy
 from .skills import SkillLoader
 from .task_graph import Task, TaskGraph, TaskStatus
+from .run_schema import utc_now_iso
 from .task_store import TaskStore
 
 __all__ = [
@@ -23,10 +23,6 @@ __all__ = [
     'TeamConfigStore', 'JsonlTeamInboxStore',
     'PersistentTeammateSpec', 'PersistentTeamRuntime',
 ]
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +57,7 @@ class TeamMessage:
             'recipient': self.recipient,
             'message_type': self.message_type.value,
             'body': self.body,
-            'created_at': self.created_at or _utc_now(),
+            'created_at': self.created_at or utc_now_iso(),
             'metadata': dict(self.metadata),
         }
 

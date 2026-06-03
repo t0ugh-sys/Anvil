@@ -27,6 +27,7 @@ Hook configuration (in settings):
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -143,8 +144,6 @@ def run_hook(
     Sends hook_input as JSON via stdin, reads JSON output from stdout.
     Returns HookOutput with approval decision and optional modifications.
     """
-    import shlex
-
     timeout = timeout_s or config.timeout_s
     try:
         # Default to shlex.split for safety; use shell=True only when explicitly requested.

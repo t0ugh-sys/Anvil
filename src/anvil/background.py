@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -108,7 +109,6 @@ class BackgroundCommandRunner:
         self._notifications.put(result)
 
     def drain_notifications(self) -> Tuple[ToolResult, ...]:
-        import queue
         results: List[ToolResult] = []
         while True:
             try:

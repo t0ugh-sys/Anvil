@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from ..agent_protocol import ToolResult
+from ..permissions import PermissionMode
 from ..policies import TOOL_CAPABILITIES
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import (
@@ -224,7 +225,6 @@ def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -
 
     # Phase 1: Validate input (if tool def has validator)
     # Phase 2: Check permissions
-    from ..permissions import PermissionMode
     capabilities = TOOL_CAPABILITIES.get(tool_call.name, tuple())
     if not context.policy.allows_tool(tool_call.name):
         denied = ', '.join(item.value for item in context.policy.denied_capabilities_for_tool(tool_call.name))
