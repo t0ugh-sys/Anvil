@@ -651,6 +651,7 @@ def openai_compatible_chat_invoke_factory(
     max_retries: int,
     retry_backoff_s: float,
     retry_http_codes: Set[int],
+    usage_tracker: TokenUsageTracker | None = None,
 ) -> ChatInvokeFn:
     """Return a chat invoke function that accepts OpenAI chat messages.
 
@@ -697,6 +698,11 @@ def openai_compatible_chat_invoke_factory(
             content = message.get('content', '')
             if not isinstance(content, str):
                 return None
+            # Track token usage from OpenAI-compatible response
+            if usage_tracker is not None:
+                usage = data.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=current_model)
             return content
 
         return _with_model_fallback(models_to_try, try_model, debug)
