@@ -102,6 +102,9 @@ class BackgroundCommandRunner:
             info = self._tasks.get(task_id)
             if info is not None:
                 self._tasks[task_id] = BackgroundTaskInfo(id=task_id, command=info.command, status=status)
+            # Release process handle and buffer after completion to avoid leaks
+            self._processes.pop(task_id, None)
+            self._output_buffers.pop(task_id, None)
         self._notifications.put(result)
 
     def drain_notifications(self) -> Tuple[ToolResult, ...]:

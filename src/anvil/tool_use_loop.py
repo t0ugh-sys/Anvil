@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import time as _time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -232,7 +234,6 @@ def _extract_key_constraints(goal: str) -> List[str]:
     requirements, and other important parameters that should be
     force-injected into every decider call.
     """
-    import re
     constraints: List[str] = []
     patterns = [
         (r'(?:must|should|always|never|do not|don\'t)\s+.{10,80}', 'rule'),
@@ -433,7 +434,6 @@ def _build_round_metadata(
             }
             for item in tool_results
         ],
-        'has_tool_calls': len(tool_calls) > 0,
         'state_summary': state_summary,
         'last_steps': list(context.last_steps),
     }
@@ -447,7 +447,6 @@ def _append_transcript_entries(
     tool_results: List[ToolResult],
     now_s: float = 0.0,
 ) -> Tuple[TranscriptEntry, ...]:
-    import time as _time
     _now = now_s if now_s > 0 else _time.time()
     entries = list(state.transcript)
     entries.append(TranscriptEntry(kind='thought', content=thought, created_at=_now))
