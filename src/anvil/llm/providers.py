@@ -6,6 +6,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Set
 
 InvokeFn = Callable[[str], str]
@@ -15,6 +16,8 @@ from ..retry import NonRetryableError, RetryExhausted, with_retry
 
 __all__ = [
     'ProviderHttpError',
+    'TokenUsageRecord',
+    'TokenUsageTracker',
     'build_invoke_from_args',
     'anthropic_invoke_factory',
     'gemini_invoke_factory',
@@ -24,9 +27,101 @@ __all__ = [
     'parse_provider_headers',
     'InvokeFn',
     'ChatInvokeFn',
+    'PromptCache',
 ]
 
 DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
+
+
+# ============== Token Usage Tracking ==============
+# Based on Claude API docs: response.usage contains precise token counts.
+# Tracks input_tokens, output_tokens, cache_creation, cache_read.
+
+
+@dataclass
+class TokenUsageRecord:
+    """A single API call's token usage."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    model: str = ''
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cache_hit_ratio(self) -> float:
+        """Fraction of input tokens served from cache (0.0-1.0)."""
+        total = self.input_tokens + self.cache_read_input_tokens
+        if total <= 0:
+            return 0.0
+        return self.cache_read_input_tokens / total
+
+
+class TokenUsageTracker:
+    """Tracks cumulative token usage across API calls.
+
+    Each Anthropic API response includes a ``usage`` field with exact
+    token counts. This tracker accumulates them for cost monitoring.
+
+    Usage::
+
+        tracker = TokenUsageTracker()
+        invoke = anthropic_invoke_factory(..., usage_tracker=invoke)
+        result = invoke(prompt)
+        print(tracker.summary())
+    """
+
+    def __init__(self) -> None:
+        self._records: list[TokenUsageRecord] = []
+
+    def record(self, usage: dict, model: str = '') -> None:
+        """Record token usage from an API response."""
+        self._records.append(TokenUsageRecord(
+            input_tokens=int(usage.get('input_tokens', 0) or 0),
+            output_tokens=int(usage.get('output_tokens', 0) or 0),
+            cache_creation_input_tokens=int(usage.get('cache_creation_input_tokens', 0) or 0),
+            cache_read_input_tokens=int(usage.get('cache_read_input_tokens', 0) or 0),
+            model=model,
+        ))
+
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(r.input_tokens for r in self._records)
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(r.output_tokens for r in self._records)
+
+    @property
+    def total_cache_creation_tokens(self) -> int:
+        return sum(r.cache_creation_input_tokens for r in self._records)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        return sum(r.cache_read_input_tokens for r in self._records)
+
+    @property
+    def call_count(self) -> int:
+        return len(self._records)
+
+    def summary(self) -> dict:
+        return {
+            'calls': self.call_count,
+            'input_tokens': self.total_input_tokens,
+            'output_tokens': self.total_output_tokens,
+            'cache_creation_tokens': self.total_cache_creation_tokens,
+            'cache_read_tokens': self.total_cache_read_tokens,
+            'total_tokens': self.total_input_tokens + self.total_output_tokens,
+        }
+
+    def last(self) -> TokenUsageRecord | None:
+        return self._records[-1] if self._records else None
+
+    def reset(self) -> None:
+        self._records.clear()
 
 
 class ProviderHttpError(Exception):
@@ -98,6 +193,7 @@ def _anthropic_invoke_factory(
     base_url: str = '',
     debug: bool = False,
     enable_native_tools: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
@@ -136,6 +232,11 @@ def _anthropic_invoke_factory(
                 retry_backoff_s=retry_backoff_s,
                 retry_http_codes=retry_http_codes,
             )
+            # Track token usage from response
+            if usage_tracker is not None:
+                usage = response.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=model)
             return _extract_anthropic_text(response)
         except ProviderHttpError as exc:
             error_msg = f'Anthropic API error: HTTP {exc.status_code}'
@@ -256,7 +357,14 @@ def _extract_anthropic_text(response: dict) -> str:
 
 
 def _anthropic_file_tools() -> list[dict[str, object]]:
-    return [
+    """Anthropic native tool definitions with prompt caching support.
+
+    Each tool definition includes cache_control for prompt caching.
+    Tool definitions are static across requests, so they are ideal
+    cache targets. First request creates the cache (10x cost),
+    subsequent requests read from cache (0.1x cost) for 5 minutes.
+    """
+    tools = [
         {
             'name': 'read_file',
             'description': 'Read one UTF-8 file inside the workspace.',
@@ -306,6 +414,11 @@ def _anthropic_file_tools() -> list[dict[str, object]]:
             },
         },
     ]
+    # Mark the last tool with cache_control for prompt caching.
+    # Claude caches everything up to and including the marked block.
+    if tools:
+        tools[-1]['cache_control'] = {'type': 'ephemeral'}
+    return tools
 
 
 def _prompt_goal(prompt: str) -> str:
@@ -469,6 +582,7 @@ def anthropic_invoke_factory(
     base_url: str = '',
     debug: bool = False,
     enable_native_tools: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
 ) -> InvokeFn:
     """Public wrapper for Anthropic provider with optional custom base_url."""
     return _anthropic_invoke_factory(
@@ -476,6 +590,7 @@ def anthropic_invoke_factory(
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
         debug=debug, enable_native_tools=enable_native_tools,
+        usage_tracker=usage_tracker,
     )
 
 
