@@ -20,7 +20,7 @@ from .compression import (
 )
 from .core.types import StepContext, StepResult
 from .policies import ToolPolicy, LoopDetector
-from .hooks import HookEvent, HookManager, HookInput, HookResult, build_hook_input_for_tool
+from .hooks import HookEvent, HookManager, HookInput, HookResult, build_hook_input_for_tool, SecurityMonitor
 from .task_graph import TaskGraph, TaskStatus
 from .task_store import TaskStore
 from .todo import TodoItem, TodoManager, TodoSnapshot, render_todo_lines
@@ -304,6 +304,7 @@ def _dispatch_tool_calls(
     tool_calls,
     hook_manager: HookManager | None = None,
     loop_detector: LoopDetector | None = None,
+    security_monitor: SecurityMonitor | None = None,
     session_id: str = '',
     workspace_root: str = '',
     parallel: bool = True,
@@ -317,9 +318,22 @@ def _dispatch_tool_calls(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Phase 1: Loop detection + PreToolUse hooks (sequential, per-tool)
+    # Phase 1: Loop detection + Security monitoring + PreToolUse hooks (sequential, per-tool)
     ready: list[tuple[int, object, ToolResult | None]] = []  # (index, tool_call, pre_result_or_None)
     for idx, tool_call in enumerate(tool_calls):
+        # --- Security monitor: check if tool is blocked ---
+        if security_monitor is not None and security_monitor.is_blocked(tool_call.name):
+            ready.append((idx, tool_call, ToolResult(
+                id=tool_call.id, ok=False, output='',
+                error=f'SECURITY: {tool_call.name} is blocked by security monitor',
+            )))
+            continue
+
+        # --- Security monitor: record call and check rate ---
+        security_alert = None
+        if security_monitor is not None:
+            security_alert = security_monitor.record_call(tool_call.name)
+
         # --- Loop detection ---
         if loop_detector is not None:
             loop_msg = loop_detector.check(tool_call.name, tool_call.arguments)
@@ -582,6 +596,7 @@ def execute_tool_use_round(
     summarizer: SummarizerFn | None = None,
     hook_manager: HookManager | None = None,
     loop_detector: LoopDetector | None = None,
+    security_monitor: SecurityMonitor | None = None,
 ) -> StepResult[ToolUseState]:
     config = compression_config or CompactConfig()
     config.validate()
@@ -645,6 +660,7 @@ def execute_tool_use_round(
         tool_calls=parsed.tool_calls,
         hook_manager=hook_manager,
         loop_detector=loop_detector,
+        security_monitor=security_monitor,
         session_id=str(tool_context.workspace_root),
         workspace_root=str(tool_context.workspace_root),
     )

@@ -172,3 +172,48 @@ def sanitize_input(text: str, *, max_length: int = _MAX_INPUT_LENGTH) -> str:
         sanitized = sanitized[:max_length]
 
     return sanitized
+
+
+# ============== PII Output Filtering ==============
+# Based on Zero2Agent article #41: Output Safety Rules
+# Detects common PII patterns in tool output before sending to LLM.
+
+
+# Common PII patterns
+_PII_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    # Email addresses
+    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[EMAIL REDACTED]'),
+    # US Social Security Numbers (XXX-XX-XXXX)
+    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[SSN REDACTED]'),
+    # Credit card numbers (16 digits, with optional spaces/dashes)
+    (re.compile(r'\b(?:\d{4}[- ]?){3}\d{4}\b'), '[CARD REDACTED]'),
+    # Chinese ID card numbers (18 digits, last may be X)
+    (re.compile(r'\b\d{17}[\dXx]\b'), '[ID REDACTED]'),
+    # Chinese mobile phone numbers (1XX-XXXX-XXXX)
+    (re.compile(r'\b1[3-9]\d{9}\b'), '[PHONE REDACTED]'),
+    # API keys (common patterns: sk-..., key-..., token-...)
+    (re.compile(r'\b(sk-[A-Za-z0-9]{20,}|[A-Za-z_-]*key-[A-Za-z0-9]{16,}|[A-Za-z_-]*token-[A-Za-z0-9]{16,})\b', re.IGNORECASE), '[API_KEY REDACTED]'),
+    # AWS access key IDs
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})\b'), '[AWS_KEY REDACTED]'),
+    # Private key headers
+    (re.compile(r'-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----'), '[PRIVATE_KEY REDACTED]'),
+]
+
+
+def redact_pii(text: str) -> str:
+    """Redact common PII patterns from text.
+
+    Applies regex-based detection for emails, SSNs, credit cards,
+    Chinese IDs, phone numbers, API keys, AWS keys, and private keys.
+
+    This is a best-effort heuristic — it may miss exotic formats or
+    produce false positives on numeric sequences.
+    """
+    if not text:
+        return text
+
+    redacted = text
+    for pattern, replacement in _PII_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+
+    return redacted

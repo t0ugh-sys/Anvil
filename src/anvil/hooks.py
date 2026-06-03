@@ -284,3 +284,154 @@ def build_hook_input_for_tool(
         session_id=session_id,
         workspace_root=workspace_root,
     )
+
+
+# ============== Security Monitor ==============
+# Based on Zero2Agent article #41: Multi-Agent Debugging & Monitoring
+# Tracks tool usage patterns and detects anomalous behavior.
+
+
+import time as _time
+
+
+class SecurityEvent:
+    """A security-related event for audit logging."""
+
+    __slots__ = ('timestamp', 'event_type', 'severity', 'tool_name', 'details')
+
+    def __init__(
+        self,
+        event_type: str,
+        severity: str,
+        tool_name: str = '',
+        details: str = '',
+    ) -> None:
+        self.timestamp = _time.time()
+        self.event_type = event_type
+        self.severity = severity  # 'info', 'warning', 'critical'
+        self.tool_name = tool_name
+        self.details = details
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'timestamp': self.timestamp,
+            'event_type': self.event_type,
+            'severity': self.severity,
+            'tool_name': self.tool_name,
+            'details': self.details[:500],
+        }
+
+
+class SecurityMonitor:
+    """Monitors tool usage patterns and detects anomalies.
+
+    Tracks per-tool call counts within a sliding time window.
+    Alerts when a tool exceeds the configured call threshold.
+
+    Usage::
+
+        monitor = SecurityMonitor(window_seconds=60, max_calls_per_tool=20)
+        alert = monitor.record_call('run_command')
+        if alert:
+            # Alert string describes the anomaly
+            log_warning(alert)
+    """
+
+    def __init__(
+        self,
+        window_seconds: float = 60.0,
+        max_calls_per_tool: int = 30,
+    ) -> None:
+        self._window = window_seconds
+        self._max_calls = max_calls_per_tool
+        self._call_times: Dict[str, list] = {}  # tool_name -> [timestamps]
+        self._events: list[SecurityEvent] = []
+        self._blocked_tools: set = set()
+
+    def record_call(self, tool_name: str) -> str | None:
+        """Record a tool call and check for anomalies.
+
+        Returns an alert string if an anomaly is detected, else None.
+        """
+        now = _time.time()
+        cutoff = now - self._window
+
+        # Initialize tracking
+        if tool_name not in self._call_times:
+            self._call_times[tool_name] = []
+
+        # Prune old timestamps
+        self._call_times[tool_name] = [
+            t for t in self._call_times[tool_name] if t > cutoff
+        ]
+
+        # Record this call
+        self._call_times[tool_name].append(now)
+        count = len(self._call_times[tool_name])
+
+        # Check threshold
+        if count >= self._max_calls:
+            self._events.append(SecurityEvent(
+                event_type='tool_rate_exceeded',
+                severity='warning',
+                tool_name=tool_name,
+                details=f'{tool_name} called {count} times in {self._window:.0f}s (limit: {self._max_calls})',
+            ))
+            return (
+                f'SECURITY WARNING: {tool_name} called {count} times in '
+                f'{self._window:.0f}s. Possible loop or abuse.'
+            )
+        return None
+
+    def block_tool(self, tool_name: str) -> None:
+        """Block a tool from being called."""
+        self._blocked_tools.add(tool_name)
+        self._events.append(SecurityEvent(
+            event_type='tool_blocked',
+            severity='critical',
+            tool_name=tool_name,
+            details=f'{tool_name} manually blocked',
+        ))
+
+    def unblock_tool(self, tool_name: str) -> None:
+        """Unblock a tool."""
+        self._blocked_tools.discard(tool_name)
+
+    def is_blocked(self, tool_name: str) -> bool:
+        """Check if a tool is blocked."""
+        return tool_name in self._blocked_tools
+
+    def get_call_count(self, tool_name: str) -> int:
+        """Get current call count for a tool within the window."""
+        now = _time.time()
+        cutoff = now - self._window
+        times = self._call_times.get(tool_name, [])
+        return sum(1 for t in times if t > cutoff)
+
+    def get_events(self, severity: str = '') -> list[Dict[str, Any]]:
+        """Get recorded security events, optionally filtered by severity."""
+        events = self._events
+        if severity:
+            events = [e for e in events if e.severity == severity]
+        return [e.to_dict() for e in events]
+
+    def reset(self) -> None:
+        """Reset all tracking state."""
+        self._call_times.clear()
+        self._events.clear()
+        self._blocked_tools.clear()
+
+    def summary(self) -> Dict[str, Any]:
+        """Get a summary of security monitoring state."""
+        tool_counts = {
+            name: self.get_call_count(name)
+            for name in self._call_times
+        }
+        return {
+            'window_seconds': self._window,
+            'max_calls_per_tool': self._max_calls,
+            'active_tools': tool_counts,
+            'blocked_tools': list(self._blocked_tools),
+            'total_events': len(self._events),
+            'critical_events': len([e for e in self._events if e.severity == 'critical']),
+        }
