@@ -20,6 +20,9 @@ __all__ = [
     'TokenUsageTracker',
     'build_invoke_from_args',
     'anthropic_invoke_factory',
+    'anthropic_chat_invoke_factory',
+    'anthropic_stream_invoke_factory',
+    'AnthropicChatResponse',
     'gemini_invoke_factory',
     'openai_compatible_chat_invoke_factory',
     'list_providers',
@@ -115,6 +118,8 @@ class TokenUsageTracker:
             'cache_creation_tokens': self.total_cache_creation_tokens,
             'cache_read_tokens': self.total_cache_read_tokens,
             'total_tokens': self.total_input_tokens + self.total_output_tokens,
+            'cache_hit_rate': self.cache_hit_rate,
+            'estimated_cost_savings': self.estimated_cost_savings,
         }
 
     def last(self) -> TokenUsageRecord | None:
@@ -122,6 +127,49 @@ class TokenUsageTracker:
 
     def reset(self) -> None:
         self._records.clear()
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Fraction of input tokens served from cache across all calls (0.0-1.0)."""
+        total_cacheable = self.total_input_tokens + self.total_cache_read_tokens
+        if total_cacheable <= 0:
+            return 0.0
+        return self.total_cache_read_tokens / total_cacheable
+
+    @property
+    def estimated_cost_savings(self) -> dict:
+        """Estimate cost savings from prompt caching.
+
+        Based on Claude API pricing:
+        - Cache write: 1.25x standard input price
+        - Cache read: 0.1x standard input price (90% discount)
+        - Standard input: 1.0x
+
+        Returns dict with estimated costs in abstract units (multiply by
+        model-specific per-token price for actual dollars).
+        """
+        standard_input = self.total_input_tokens
+        cache_write = self.total_cache_creation_tokens
+        cache_read = self.total_cache_read_tokens
+
+        # Without caching: all tokens at standard rate
+        cost_without_cache = standard_input * 1.0
+
+        # With caching: creation at 1.25x, reads at 0.1x, rest at 1.0x
+        uncached_tokens = max(0, standard_input - cache_write - cache_read)
+        cost_with_cache = (
+            uncached_tokens * 1.0
+            + cache_write * 1.25
+            + cache_read * 0.1
+        )
+
+        savings = max(0, cost_without_cache - cost_with_cache)
+        return {
+            'cost_without_cache': cost_without_cache,
+            'cost_with_cache': cost_with_cache,
+            'savings': savings,
+            'savings_percent': (savings / cost_without_cache * 100) if cost_without_cache > 0 else 0.0,
+        }
 
 
 class ProviderHttpError(Exception):
@@ -196,6 +244,7 @@ def _anthropic_invoke_factory(
     usage_tracker: TokenUsageTracker | None = None,
     stop_sequences: List[str] | None = None,
     thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
@@ -204,17 +253,50 @@ def _anthropic_invoke_factory(
         'content-type': 'application/json',
     }
 
+    def _split_system_user(prompt: str) -> Tuple[str, str]:
+        """Split prompt into (system_prompt, user_prompt) for caching.
+
+        When prompt caching is enabled, the system prompt is sent separately
+        with cache_control so it's cached across requests (90% cost reduction
+        on subsequent calls). The system prompt is identified by looking for
+        the first 'Goal:' or 'User:' section boundary.
+        """
+        # Look for common prompt section markers
+        for marker in ('\nGoal:\n', '\nUser request:\n', '\nUser:\n'):
+            if marker in prompt:
+                idx = prompt.index(marker)
+                system_part = prompt[:idx].strip()
+                user_part = prompt[idx:].strip()
+                if len(system_part) > 200:  # Only cache if system part is substantial
+                    return system_part, user_part
+        return '', prompt
+
+    def _build_max_tokens() -> int:
+        """Calculate max_tokens respecting thinking budget constraints.
+
+        Claude API requires max_tokens > budget_tokens when extended thinking
+        is enabled. Default max_tokens should also be reasonable for the task.
+        """
+        if thinking_budget_tokens > 0:
+            # Ensure max_tokens > budget_tokens (API requirement)
+            # Use budget + 4096 for output, or at least 2x budget
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096 if enable_native_tools else 1024
+
     def _request_once(prompt: str) -> dict:
         request_prompt = prompt
-        payload = {
+        max_tokens = _build_max_tokens()
+
+        payload: Dict[str, object] = {
             'model': model,
-            'max_tokens': 4096 if enable_native_tools else 1024,
+            'max_tokens': max_tokens,
             'temperature': temperature,
-            'messages': [{'role': 'user', 'content': request_prompt}],
         }
+
         # Stop sequences — halt generation when encountered
         if stop_sequences:
             payload['stop_sequences'] = stop_sequences
+
         # Extended thinking — enable Claude's internal reasoning
         if thinking_budget_tokens > 0:
             payload['thinking'] = {
@@ -223,18 +305,53 @@ def _anthropic_invoke_factory(
             }
             # Extended thinking requires temperature=1
             payload['temperature'] = 1.0
+
+        # Prompt caching: split system prompt for separate caching
+        if enable_prompt_caching and not enable_native_tools:
+            system_prompt, user_prompt = _split_system_user(prompt)
+            if system_prompt:
+                payload['system'] = [
+                    {
+                        'type': 'text',
+                        'text': system_prompt,
+                        'cache_control': {'type': 'ephemeral'},
+                    }
+                ]
+                payload['messages'] = [{'role': 'user', 'content': user_prompt}]
+            else:
+                payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+        else:
+            payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+
+        # Native tool use (coding mode)
         if (
             enable_native_tools
             and _prompt_requires_file_tool(prompt)
             and not _prompt_has_successful_tool_result(prompt)
         ):
             request_prompt = _native_tool_prompt(prompt)
-            payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+            if enable_prompt_caching:
+                # Split native tool prompt too
+                system_prompt, user_prompt = _split_system_user(request_prompt)
+                if system_prompt:
+                    payload['system'] = [
+                        {
+                            'type': 'text',
+                            'text': system_prompt,
+                            'cache_control': {'type': 'ephemeral'},
+                        }
+                    ]
+                    payload['messages'] = [{'role': 'user', 'content': user_prompt}]
+                else:
+                    payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+            else:
+                payload['messages'] = [{'role': 'user', 'content': request_prompt}]
             payload['tools'] = _anthropic_file_tools()
             if _prompt_should_force_write_file(prompt):
                 payload['tool_choice'] = {'type': 'tool', 'name': 'write_file'}
             else:
                 payload['tool_choice'] = {'type': 'any'}
+
         return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
@@ -607,8 +724,15 @@ def anthropic_invoke_factory(
     usage_tracker: TokenUsageTracker | None = None,
     stop_sequences: List[str] | None = None,
     thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
 ) -> InvokeFn:
-    """Public wrapper for Anthropic provider with optional custom base_url."""
+    """Public wrapper for Anthropic provider with optional custom base_url.
+
+    Args:
+        enable_prompt_caching: When True (default), split system prompt from
+            user prompt and send with cache_control for 90% cost savings on
+            repeated calls. Requires ≥1024 tokens in the cached portion.
+    """
     return _anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
@@ -617,7 +741,330 @@ def anthropic_invoke_factory(
         usage_tracker=usage_tracker,
         stop_sequences=stop_sequences,
         thinking_budget_tokens=thinking_budget_tokens,
+        enable_prompt_caching=enable_prompt_caching,
     )
+
+
+@dataclass
+class AnthropicChatResponse:
+    """Structured response from Anthropic chat with thinking support.
+
+    Contains both the text response and any thinking blocks,
+    enabling multi-turn conversations that preserve thinking context.
+    """
+    text: str
+    thinking_blocks: List[Dict[str, str]] = None  # [{'type': 'thinking', 'thinking': '...'}]
+    raw_content: List[Dict] = None  # Full content blocks from API
+
+    def __post_init__(self):
+        if self.thinking_blocks is None:
+            self.thinking_blocks = []
+        if self.raw_content is None:
+            self.raw_content = []
+
+    def to_assistant_message(self) -> Dict[str, object]:
+        """Convert to assistant message format for multi-turn passback.
+
+        Claude API requires thinking blocks to be passed back in subsequent
+        messages for conversation continuity with extended thinking.
+        """
+        content = []
+        for block in self.thinking_blocks:
+            content.append({
+                'type': 'thinking',
+                'thinking': block.get('thinking', ''),
+            })
+        if self.text:
+            content.append({
+                'type': 'text',
+                'text': self.text,
+            })
+        return {'role': 'assistant', 'content': content}
+
+
+def anthropic_chat_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float = 0.2,
+    timeout_s: float = 60.0,
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+    system_prompt: str = '',
+) -> Callable[[List[Dict[str, object]]], AnthropicChatResponse]:
+    """Anthropic provider with full messages array support and thinking block passback.
+
+    Unlike `anthropic_invoke_factory` which takes a single prompt string,
+    this factory accepts a messages array for proper multi-turn conversations.
+    It returns an `AnthropicChatResponse` that includes thinking blocks,
+    which must be passed back in subsequent messages per Claude API requirements.
+
+    Usage::
+
+        invoke = anthropic_chat_invoke_factory(
+            api_key='...', model='claude-sonnet-4-20250514',
+            thinking_budget_tokens=10000,
+            system_prompt='You are a coding assistant.',
+        )
+        # First turn
+        response = invoke([{'role': 'user', 'content': 'Solve this...'}])
+        # Second turn — pass back thinking blocks
+        messages = [
+            {'role': 'user', 'content': 'Solve this...'},
+            response.to_assistant_message(),
+            {'role': 'user', 'content': 'Now explain your reasoning.'},
+        ]
+        response2 = invoke(messages)
+    """
+    endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    def _build_max_tokens() -> int:
+        if thinking_budget_tokens > 0:
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096
+
+    def _request_once(messages: List[Dict[str, object]]) -> dict:
+        payload: Dict[str, object] = {
+            'model': model,
+            'max_tokens': _build_max_tokens(),
+            'temperature': temperature,
+            'messages': messages,
+        }
+
+        if stop_sequences:
+            payload['stop_sequences'] = stop_sequences
+
+        # Extended thinking
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            payload['temperature'] = 1.0
+
+        # System prompt with cache_control
+        if system_prompt:
+            payload['system'] = [
+                {
+                    'type': 'text',
+                    'text': system_prompt,
+                    'cache_control': {'type': 'ephemeral'} if enable_prompt_caching else {},
+                }
+            ]
+
+        return _http_post_json(endpoint, payload, headers, timeout_s)
+
+    def invoke(messages: List[Dict[str, object]]) -> AnthropicChatResponse:
+        try:
+            response = _request_with_retry(
+                request_fn=lambda: _request_once(messages),
+                max_retries=2,
+                retry_backoff_s=1.0,
+                retry_http_codes={502, 503, 504, 524},
+            )
+
+            # Track usage
+            if usage_tracker is not None:
+                usage = response.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=model)
+
+            # Parse response content blocks
+            content = response.get('content', [])
+            text_parts: List[str] = []
+            thinking_blocks: List[Dict[str, str]] = []
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get('type')
+                if block_type == 'thinking':
+                    thinking_text = block.get('thinking', '')
+                    if isinstance(thinking_text, str) and thinking_text.strip():
+                        thinking_blocks.append({
+                            'type': 'thinking',
+                            'thinking': thinking_text,
+                        })
+                elif block_type == 'text':
+                    text = block.get('text', '')
+                    if isinstance(text, str) and text.strip():
+                        text_parts.append(text.strip())
+
+            return AnthropicChatResponse(
+                text='\n'.join(text_parts),
+                thinking_blocks=thinking_blocks,
+                raw_content=content,
+            )
+
+        except ProviderHttpError as exc:
+            error_msg = f'Anthropic API error: HTTP {exc.status_code}'
+            if debug and exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            detail = str(exc).strip()
+            message = 'invalid Anthropic response format'
+            if detail:
+                message = f'{message}: {detail}'
+            raise ValueError(message) from exc
+
+    return invoke
+
+
+def anthropic_stream_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float = 0.2,
+    timeout_s: float = 120.0,
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+    system_prompt: str = '',
+) -> Callable[[List[Dict[str, object]]], AnthropicChatResponse]:
+    """Streaming Anthropic provider for real-time responses.
+
+    Uses SSE (Server-Sent Events) to stream responses, providing
+    better UX for long-running requests. Returns the complete
+    AnthropicChatResponse after streaming finishes.
+
+    For extended thinking, streaming shows thinking progress in real-time,
+    which is especially valuable for complex reasoning tasks.
+    """
+    endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    def _build_max_tokens() -> int:
+        if thinking_budget_tokens > 0:
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096
+
+    def _request_once_stream(messages: List[Dict[str, object]]) -> dict:
+        payload: Dict[str, object] = {
+            'model': model,
+            'max_tokens': _build_max_tokens(),
+            'temperature': temperature,
+            'messages': messages,
+            'stream': True,
+        }
+
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            payload['temperature'] = 1.0
+
+        if system_prompt:
+            payload['system'] = [
+                {
+                    'type': 'text',
+                    'text': system_prompt,
+                    'cache_control': {'type': 'ephemeral'} if enable_prompt_caching else {},
+                }
+            ]
+
+        body = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                # Parse SSE stream
+                text_parts: List[str] = []
+                thinking_blocks: List[Dict[str, str]] = []
+                current_thinking = ''
+                usage_data: Dict[str, int] = {}
+
+                for line in response:
+                    line_str = line.decode('utf-8', errors='replace').strip()
+                    if not line_str or line_str.startswith(':'):
+                        continue
+                    if line_str.startswith('data: '):
+                        data_str = line_str[6:]
+                        if data_str == '[DONE]':
+                            break
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = event.get('type', '')
+
+                        if event_type == 'content_block_start':
+                            block = event.get('content_block', {})
+                            if block.get('type') == 'thinking':
+                                current_thinking = ''
+                        elif event_type == 'content_block_delta':
+                            delta = event.get('delta', {})
+                            delta_type = delta.get('type', '')
+                            if delta_type == 'thinking_delta':
+                                current_thinking += delta.get('thinking', '')
+                            elif delta_type == 'text_delta':
+                                text_parts.append(delta.get('text', ''))
+                        elif event_type == 'content_block_stop':
+                            if current_thinking:
+                                thinking_blocks.append({
+                                    'type': 'thinking',
+                                    'thinking': current_thinking,
+                                })
+                                current_thinking = ''
+                        elif event_type == 'message_delta':
+                            usage_delta = event.get('usage', {})
+                            for k, v in usage_delta.items():
+                                usage_data[k] = usage_data.get(k, 0) + (v if isinstance(v, int) else 0)
+                        elif event_type == 'message_start':
+                            start_usage = event.get('message', {}).get('usage', {})
+                            for k, v in start_usage.items():
+                                usage_data[k] = usage_data.get(k, 0) + (v if isinstance(v, int) else 0)
+
+                # Track usage
+                if usage_tracker is not None and usage_data:
+                    usage_tracker.record(usage_data, model=model)
+
+                return {
+                    'text': ''.join(text_parts),
+                    'thinking_blocks': thinking_blocks,
+                    'usage': usage_data,
+                }
+
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+    def invoke(messages: List[Dict[str, object]]) -> AnthropicChatResponse:
+        try:
+            result = _request_once_stream(messages)
+            return AnthropicChatResponse(
+                text=result.get('text', ''),
+                thinking_blocks=result.get('thinking_blocks', []),
+                raw_content=[],
+            )
+        except ProviderHttpError as exc:
+            error_msg = f'Anthropic streaming error: HTTP {exc.status_code}'
+            if debug and exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+
+    return invoke
 
 
 def gemini_invoke_factory(
