@@ -18,6 +18,7 @@ __all__ = [
     'ProviderHttpError',
     'TokenUsageRecord',
     'TokenUsageTracker',
+    'CostTracker',
     'build_invoke_from_args',
     'anthropic_invoke_factory',
     'anthropic_chat_invoke_factory',
@@ -171,6 +172,124 @@ class TokenUsageTracker:
             'cost_with_cache': cost_with_cache,
             'savings': savings,
             'savings_percent': (savings / cost_without_cache * 100) if cost_without_cache > 0 else 0.0,
+        }
+
+
+# Claude API pricing (per million tokens, as of 2025)
+# Source: https://platform.claude.com/docs/zh-CN/about-claude/models
+_CLAUDE_PRICING = {
+    'claude-opus-4': {'input': 15.0, 'output': 75.0, 'cache_write': 18.75, 'cache_read': 1.5},
+    'claude-sonnet-4': {'input': 3.0, 'output': 15.0, 'cache_write': 3.75, 'cache_read': 0.3},
+    'claude-haiku-3.5': {'input': 0.80, 'output': 4.0, 'cache_write': 1.0, 'cache_read': 0.08},
+    # Default fallback
+    'default': {'input': 3.0, 'output': 15.0, 'cache_write': 3.75, 'cache_read': 0.3},
+}
+
+
+class CostTracker:
+    """Track estimated API costs based on Claude pricing.
+
+    Uses model-specific pricing to estimate actual dollar costs.
+    Integrates with TokenUsageTracker for token counts.
+
+    Usage::
+
+        cost = CostTracker(model='claude-sonnet-4')
+        cost.add_from_tracker(usage_tracker)
+        print(cost.summary())
+    """
+
+    def __init__(self, model: str = 'claude-sonnet-4'):
+        self.model = model
+        self._pricing = self._resolve_pricing(model)
+        self._calls: list = []
+
+    @staticmethod
+    def _resolve_pricing(model: str) -> dict:
+        """Resolve pricing for a model string."""
+        model_lower = model.lower()
+        for key, pricing in _CLAUDE_PRICING.items():
+            if key != 'default' and key in model_lower:
+                return pricing
+        return _CLAUDE_PRICING['default']
+
+    def add(
+        self,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+    ) -> None:
+        """Record a single API call's token usage."""
+        self._calls.append({
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'cache_creation_tokens': cache_creation_tokens,
+            'cache_read_tokens': cache_read_tokens,
+        })
+
+    def add_from_tracker(self, tracker: TokenUsageTracker) -> None:
+        """Import all records from a TokenUsageTracker."""
+        for record in tracker._records:
+            self.add(
+                input_tokens=record.input_tokens,
+                output_tokens=record.output_tokens,
+                cache_creation_tokens=record.cache_creation_input_tokens,
+                cache_read_tokens=record.cache_read_input_tokens,
+            )
+
+    @property
+    def total_cost(self) -> float:
+        """Total estimated cost in dollars."""
+        return sum(self._call_cost(c) for c in self._calls)
+
+    @property
+    def cost_without_cache(self) -> float:
+        """What the cost would be without any caching."""
+        total = 0.0
+        for c in self._calls:
+            total_input = c['input_tokens'] + c['cache_read_tokens']
+            total += (total_input / 1_000_000) * self._pricing['input']
+            total += (c['output_tokens'] / 1_000_000) * self._pricing['output']
+        return total
+
+    @property
+    def savings(self) -> float:
+        """Estimated savings from caching."""
+        return max(0, self.cost_without_cache - self.total_cost)
+
+    def _call_cost(self, call: dict) -> float:
+        """Calculate cost for a single call."""
+        cost = 0.0
+        # Regular input tokens (excluding cache-related)
+        regular_input = max(0, call['input_tokens'] - call['cache_creation_tokens'] - call['cache_read_tokens'])
+        cost += (regular_input / 1_000_000) * self._pricing['input']
+        cost += (call['cache_creation_tokens'] / 1_000_000) * self._pricing['cache_write']
+        cost += (call['cache_read_tokens'] / 1_000_000) * self._pricing['cache_read']
+        cost += (call['output_tokens'] / 1_000_000) * self._pricing['output']
+        return cost
+
+    def summary(self) -> dict:
+        """Return cost summary."""
+        total_input = sum(c['input_tokens'] for c in self._calls)
+        total_output = sum(c['output_tokens'] for c in self._calls)
+        total_cache_create = sum(c['cache_creation_tokens'] for c in self._calls)
+        total_cache_read = sum(c['cache_read_tokens'] for c in self._calls)
+        return {
+            'model': self.model,
+            'calls': len(self._calls),
+            'total_input_tokens': total_input,
+            'total_output_tokens': total_output,
+            'total_cache_creation_tokens': total_cache_create,
+            'total_cache_read_tokens': total_cache_read,
+            'total_cost_usd': round(self.total_cost, 6),
+            'cost_without_cache_usd': round(self.cost_without_cache, 6),
+            'savings_usd': round(self.savings, 6),
+            'savings_percent': round(
+                (self.savings / self.cost_without_cache * 100) if self.cost_without_cache > 0 else 0.0,
+                2,
+            ),
+            'pricing_per_million': self._pricing,
         }
 
 

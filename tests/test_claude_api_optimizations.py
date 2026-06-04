@@ -399,3 +399,77 @@ class TestAnthropicCountTokens:
         )
         # Fallback estimation only counts messages, not system prompt
         assert count > 0
+
+
+# ============== CostTracker ==============
+
+
+class TestCostTracker:
+    def test_basic_cost_tracking(self):
+        from anvil.llm.providers import CostTracker
+        cost = CostTracker(model='claude-sonnet-4')
+        cost.add(input_tokens=1000, output_tokens=500)
+        assert cost.total_cost > 0
+        assert cost.savings == 0  # No cache = no savings
+
+    def test_cache_savings(self):
+        from anvil.llm.providers import CostTracker
+        cost = CostTracker(model='claude-sonnet-4')
+        # Simulate cache creation
+        cost.add(input_tokens=1000, output_tokens=500, cache_creation_tokens=800)
+        # Simulate cache hit
+        cost.add(input_tokens=200, output_tokens=500, cache_read_tokens=800)
+        assert cost.savings > 0
+        assert cost.cost_without_cache > cost.total_cost
+
+    def test_model_pricing(self):
+        from anvil.llm.providers import CostTracker
+        opus = CostTracker(model='claude-opus-4')
+        sonnet = CostTracker(model='claude-sonnet-4')
+        haiku = CostTracker(model='claude-haiku-3.5')
+        # Opus is most expensive
+        opus.add(input_tokens=1000, output_tokens=1000)
+        sonnet.add(input_tokens=1000, output_tokens=1000)
+        haiku.add(input_tokens=1000, output_tokens=1000)
+        assert opus.total_cost > sonnet.total_cost > haiku.total_cost
+
+    def test_summary(self):
+        from anvil.llm.providers import CostTracker
+        cost = CostTracker(model='claude-sonnet-4')
+        cost.add(input_tokens=1000, output_tokens=500, cache_creation_tokens=500)
+        cost.add(input_tokens=200, output_tokens=300, cache_read_tokens=500)
+        summary = cost.summary()
+        assert summary['model'] == 'claude-sonnet-4'
+        assert summary['calls'] == 2
+        assert summary['total_input_tokens'] == 1200
+        assert summary['total_output_tokens'] == 800
+        assert 'total_cost_usd' in summary
+        assert 'savings_usd' in summary
+        assert 'savings_percent' in summary
+        assert 'pricing_per_million' in summary
+
+    def test_add_from_tracker(self):
+        from anvil.llm.providers import CostTracker, TokenUsageTracker
+        tracker = TokenUsageTracker()
+        tracker.record({
+            'input_tokens': 1000,
+            'output_tokens': 500,
+            'cache_creation_input_tokens': 800,
+            'cache_read_input_tokens': 0,
+        })
+        tracker.record({
+            'input_tokens': 200,
+            'output_tokens': 300,
+            'cache_creation_input_tokens': 0,
+            'cache_read_input_tokens': 800,
+        })
+        cost = CostTracker(model='claude-sonnet-4')
+        cost.add_from_tracker(tracker)
+        assert cost.summary()['calls'] == 2
+        assert cost.savings > 0
+
+    def test_unknown_model_defaults(self):
+        from anvil.llm.providers import CostTracker
+        cost = CostTracker(model='some-future-model')
+        cost.add(input_tokens=1000, output_tokens=500)
+        assert cost.total_cost > 0
