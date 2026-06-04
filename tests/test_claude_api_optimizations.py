@@ -473,3 +473,51 @@ class TestCostTracker:
         cost = CostTracker(model='some-future-model')
         cost.add(input_tokens=1000, output_tokens=500)
         assert cost.total_cost > 0
+
+
+# ============== Batch API ==============
+
+
+class TestBatchRequest:
+    def test_to_anthropic_request(self):
+        from anvil.llm.providers import BatchRequest
+        req = BatchRequest(custom_id='req1', prompt='Hello')
+        result = req.to_anthropic_request('claude-sonnet-4')
+        assert result['custom_id'] == 'req1'
+        assert result['params']['model'] == 'claude-sonnet-4'
+        assert result['params']['messages'] == [{'role': 'user', 'content': 'Hello'}]
+
+    def test_with_thinking(self):
+        from anvil.llm.providers import BatchRequest
+        req = BatchRequest(custom_id='req2', prompt='Think hard', thinking_budget_tokens=5000)
+        result = req.to_anthropic_request('claude-sonnet-4')
+        assert 'thinking' in result['params']
+        assert result['params']['thinking']['budget_tokens'] == 5000
+        assert result['params']['temperature'] == 1.0
+        # max_tokens should be > budget_tokens
+        assert result['params']['max_tokens'] > 5000
+
+    def test_with_stop_sequences(self):
+        from anvil.llm.providers import BatchRequest
+        req = BatchRequest(custom_id='req3', prompt='Stop', stop_sequences=['END'])
+        result = req.to_anthropic_request('claude-sonnet-4')
+        assert result['params']['stop_sequences'] == ['END']
+
+
+class TestBatchResult:
+    def test_ok_result(self):
+        from anvil.llm.providers import BatchResult
+        result = BatchResult(custom_id='r1', text='Hello')
+        assert result.ok
+        assert result.text == 'Hello'
+
+    def test_error_result(self):
+        from anvil.llm.providers import BatchResult
+        result = BatchResult(custom_id='r2', error='rate limited')
+        assert not result.ok
+
+    def test_token_tracking(self):
+        from anvil.llm.providers import BatchResult
+        result = BatchResult(custom_id='r3', text='ok', input_tokens=100, output_tokens=50)
+        assert result.input_tokens == 100
+        assert result.output_tokens == 50
