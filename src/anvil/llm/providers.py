@@ -22,6 +22,8 @@ __all__ = [
     'anthropic_invoke_factory',
     'anthropic_chat_invoke_factory',
     'anthropic_stream_invoke_factory',
+    'anthropic_count_tokens',
+    'anthropic_count_tokens_or_estimate',
     'AnthropicChatResponse',
     'gemini_invoke_factory',
     'openai_compatible_chat_invoke_factory',
@@ -258,17 +260,39 @@ def _anthropic_invoke_factory(
 
         When prompt caching is enabled, the system prompt is sent separately
         with cache_control so it's cached across requests (90% cost reduction
-        on subsequent calls). The system prompt is identified by looking for
-        the first 'Goal:' or 'User:' section boundary.
+        on subsequent calls).
+
+        Strategy:
+        1. Look for section markers that separate static instructions from
+           dynamic content (Goal, StateSummary, History, etc.)
+        2. Everything before the first dynamic section = system prompt
+        3. The system prompt must be substantial (≥200 chars) to be worth caching
         """
-        # Look for common prompt section markers
-        for marker in ('\nGoal:\n', '\nUser request:\n', '\nUser:\n'):
-            if marker in prompt:
-                idx = prompt.index(marker)
-                system_part = prompt[:idx].strip()
-                user_part = prompt[idx:].strip()
-                if len(system_part) > 200:  # Only cache if system part is substantial
-                    return system_part, user_part
+        # Dynamic section markers — everything after these is per-request
+        dynamic_markers = (
+            '\nGoal:\n', '\nGoal: ',
+            '\nUser request:\n', '\nUser:\n',
+            '\nStateSummary:\n',
+            '\nTask:\n', '\nTask: ',
+            '\nCurrent task:\n',
+            '\nInstruction:\n',
+        )
+
+        # Find the earliest dynamic section
+        earliest_idx = len(prompt)
+        for marker in dynamic_markers:
+            idx = prompt.find(marker)
+            if 0 < idx < earliest_idx:
+                earliest_idx = idx
+
+        if earliest_idx < len(prompt):
+            system_part = prompt[:earliest_idx].strip()
+            user_part = prompt[earliest_idx:].strip()
+            # Only split if system part is substantial enough for caching
+            # (Claude API requires ≥1024 tokens to activate caching)
+            if len(system_part) > 200:
+                return system_part, user_part
+
         return '', prompt
 
     def _build_max_tokens() -> int:
@@ -1065,6 +1089,104 @@ def anthropic_stream_invoke_factory(
             raise ValueError(error_msg) from exc
 
     return invoke
+
+
+def anthropic_count_tokens(
+    *,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, object]],
+    system_prompt: str = '',
+    tools: Optional[List[Dict]] = None,
+    base_url: str = '',
+    timeout_s: float = 30.0,
+) -> Dict[str, int]:
+    """Count tokens for a request without making an actual API call.
+
+    Uses Anthropic's token counting endpoint for precise token counts,
+    which is more accurate than the estimation in token_estimation.py.
+
+    Args:
+        api_key: Anthropic API key
+        model: Model identifier (e.g. 'claude-sonnet-4-20250514')
+        messages: Messages array to count tokens for
+        system_prompt: Optional system prompt
+        tools: Optional tool definitions
+        base_url: Optional custom base URL
+        timeout_s: Request timeout
+
+    Returns:
+        Dict with 'input_tokens' count and optional 'output_tokens' estimate
+    """
+    endpoint = (base_url.rstrip('/') + '/v1/messages?beta=true') if base_url else 'https://api.anthropic.com/v1/messages?beta=true'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    payload: Dict[str, object] = {
+        'model': model,
+        'messages': messages,
+    }
+
+    if system_prompt:
+        payload['system'] = [{'type': 'text', 'text': system_prompt}]
+
+    if tools:
+        payload['tools'] = tools
+
+    try:
+        body = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return {
+                'input_tokens': int(result.get('input_tokens', 0)),
+            }
+    except urllib.error.HTTPError as exc:
+        error_body = ''
+        try:
+            error_body = exc.read().decode('utf-8', errors='replace')
+        except Exception:
+            error_body = str(exc)
+        # If counting endpoint is not available, fall back to estimation
+        raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+    except Exception as exc:
+        raise ValueError(f'Token counting failed: {exc}') from exc
+
+
+def anthropic_count_tokens_or_estimate(
+    *,
+    api_key: str = '',
+    model: str = 'claude-sonnet-4-20250514',
+    messages: List[Dict[str, object]],
+    system_prompt: str = '',
+    tools: Optional[List[Dict]] = None,
+    base_url: str = '',
+) -> int:
+    """Count tokens with automatic fallback to estimation.
+
+    Tries the Anthropic counting API first; if unavailable (no API key,
+    rate limited, etc.), falls back to the local estimation algorithm.
+    """
+    if api_key:
+        try:
+            result = anthropic_count_tokens(
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                base_url=base_url,
+            )
+            return result['input_tokens']
+        except (ProviderHttpError, ValueError):
+            pass  # Fall through to estimation
+
+    # Fallback: estimate from content length
+    from ..token_estimation import estimate_messages_tokens
+    return estimate_messages_tokens(messages)
 
 
 def gemini_invoke_factory(

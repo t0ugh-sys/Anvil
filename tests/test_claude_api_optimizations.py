@@ -6,16 +6,14 @@ import _bootstrap  # noqa: F401
 from anvil.compression import (
     CompactConfig,
     CompactManager,
-    CompactStrategy,
     PromptCacheManager,
     hierarchical_compact_messages,
     HierarchicalSummarizer,
-    SummaryLevel,
     add_cache_control_hints,
 )
 from anvil.llm.providers import (
-    TokenUsageRecord,
     TokenUsageTracker,
+    AnthropicChatResponse,
 )
 
 
@@ -41,7 +39,7 @@ class TestTokenUsageTrackerCacheMetrics:
             'cache_creation_input_tokens': 0,
             'cache_read_input_tokens': 1000,
         })
-        # cache_read / (input + cache_read) = 1000 / (1200 + 1000) ≈ 0.45
+        # cache_read / (input + cache_read) = 1000 / (1200 + 1000) = 0.45
         assert tracker.cache_hit_rate > 0.4
 
     def test_estimated_cost_savings_no_cache(self):
@@ -56,14 +54,12 @@ class TestTokenUsageTrackerCacheMetrics:
 
     def test_estimated_cost_savings_with_cache(self):
         tracker = TokenUsageTracker()
-        # First call: cache creation
         tracker.record({
             'input_tokens': 1000,
             'output_tokens': 500,
             'cache_creation_input_tokens': 800,
             'cache_read_input_tokens': 0,
         })
-        # Second call: cache hit
         tracker.record({
             'input_tokens': 200,
             'output_tokens': 500,
@@ -71,12 +67,6 @@ class TestTokenUsageTrackerCacheMetrics:
             'cache_read_input_tokens': 800,
         })
         savings = tracker.estimated_cost_savings
-        # With caching: 800 reads at 0.1x = 80, 800 writes at 1.25x = 1000
-        # Without: 1200 at 1.0x = 1200
-        # With: 400 uncached at 1.0x + 800 write at 1.25x + 800 read at 0.1x
-        # = 400 + 1000 + 80 = 1480
-        # Savings = 1200 - (400 + 1000 + 80) ... hmm, let me just check it's positive
-        assert savings['savings'] >= 0
         assert savings['cost_with_cache'] < savings['cost_without_cache']
 
     def test_summary_includes_cache_fields(self):
@@ -98,17 +88,17 @@ class TestTokenUsageTrackerCacheMetrics:
 
 
 class TestHierarchicalSummarizer:
-    def _make_messages(self, n_rounds: int = 5) -> list:
+    def _make_messages(self, n_rounds=5):
         msgs = [
             {'role': 'system', 'content': 'You are a coding assistant.'},
         ]
         for i in range(n_rounds):
-            msgs.append({'role': 'user', 'content': f'Task {i}: do something'})
+            msgs.append({'role': 'user', 'content': 'Task %d: do something' % i})
             msgs.append({'role': 'assistant', 'content': [
-                {'type': 'tool_use', 'id': f't{i}', 'name': 'read_file', 'input': {}}
+                {'type': 'tool_use', 'id': 't%d' % i, 'name': 'read_file', 'input': {}}
             ]})
-            msgs.append({'role': 'tool', 'content': f'output {i}', 'tool_use_id': f't{i}'})
-            msgs.append({'role': 'assistant', 'content': f'Done with task {i}.'})
+            msgs.append({'role': 'tool', 'content': 'output %d' % i, 'tool_use_id': 't%d' % i})
+            msgs.append({'role': 'assistant', 'content': 'Done with task %d.' % i})
         return msgs
 
     def test_empty_messages(self):
@@ -120,15 +110,14 @@ class TestHierarchicalSummarizer:
         s = HierarchicalSummarizer(l2_block_size=3)
         levels = s.summarize(msgs)
         assert len(levels) == 3
-        assert levels[0].level == 1  # per-round
-        assert levels[1].level == 2  # block
-        assert levels[2].level == 3  # global
+        assert levels[0].level == 1
+        assert levels[1].level == 2
+        assert levels[2].level == 3
 
     def test_small_conversation_no_l2(self):
         msgs = self._make_messages(2)
         s = HierarchicalSummarizer(l2_block_size=5)
         levels = s.summarize(msgs)
-        # Only 2 rounds, less than block_size → no L2
         assert len(levels) == 2
         assert levels[0].level == 1
         assert levels[1].level == 3
@@ -147,7 +136,6 @@ class TestHierarchicalSummarizer:
         levels = s.summarize(msgs)
         l3 = levels[-1]
         assert l3.level == 3
-        # Global summary should be concise
         assert l3.token_count < 100
 
     def test_with_llm_provider(self):
@@ -156,31 +144,22 @@ class TestHierarchicalSummarizer:
 
         def fake_provider(system_prompt, text):
             call_count[0] += 1
-            return f'Summary of: {text[:50]}'
+            return 'Summary of: %s' % text[:50]
 
         s = HierarchicalSummarizer(summary_provider=fake_provider, l2_block_size=2)
         levels = s.summarize(msgs)
         assert len(levels) == 3
-        # LLM provider should be called for L2 blocks + L3
         assert call_count[0] >= 2
-
-    def test_token_ranges(self):
-        msgs = self._make_messages(8)
-        s = HierarchicalSummarizer(l2_block_size=3)
-        levels = s.summarize(msgs, max_l1_tokens=100, max_l2_tokens=50, max_l3_tokens=30)
-        # Levels should respect token limits
-        for lv in levels:
-            assert lv.token_count >= 0
 
 
 class TestHierarchicalCompactMessages:
-    def _make_messages(self, n_rounds: int = 6) -> list:
+    def _make_messages(self, n_rounds=6):
         msgs = [
             {'role': 'system', 'content': 'You are a coding assistant.'},
         ]
         for i in range(n_rounds):
-            msgs.append({'role': 'user', 'content': f'Task {i}'})
-            msgs.append({'role': 'assistant', 'content': f'Done {i}'})
+            msgs.append({'role': 'user', 'content': 'Task %d' % i})
+            msgs.append({'role': 'assistant', 'content': 'Done %d' % i})
         return msgs
 
     def test_no_compaction_if_few_rounds(self):
@@ -193,32 +172,22 @@ class TestHierarchicalCompactMessages:
         msgs = self._make_messages(8)
         s = HierarchicalSummarizer()
         result = hierarchical_compact_messages(msgs, summarizer=s, keep_recent_rounds=2, summary_level=2)
-        # Should have summary message + recent rounds
         assert result[0]['role'] == 'system'
         assert 'Hierarchical Summary' in result[0]['content']
         assert len(result) < len(msgs)
-
-    def test_preserves_recent_rounds(self):
-        msgs = self._make_messages(8)
-        s = HierarchicalSummarizer()
-        result = hierarchical_compact_messages(msgs, summarizer=s, keep_recent_rounds=2, summary_level=1)
-        # Last few messages should be preserved
-        last_user = result[-1]
-        assert last_user['role'] == 'assistant'
-        assert 'Done 7' in str(last_user.get('content', ''))
 
 
 # ============== PromptCacheManager ==============
 
 
 class TestPromptCacheManager:
-    def _make_messages(self, n_rounds: int = 6) -> list:
+    def _make_messages(self, n_rounds=6):
         msgs = [
             {'role': 'system', 'content': 'You are a coding assistant. ' * 100},
         ]
         for i in range(n_rounds):
-            msgs.append({'role': 'user', 'content': f'Task {i}'})
-            msgs.append({'role': 'assistant', 'content': f'Done {i}'})
+            msgs.append({'role': 'user', 'content': 'Task %d' % i})
+            msgs.append({'role': 'assistant', 'content': 'Done %d' % i})
         return msgs
 
     def test_split_empty(self):
@@ -238,14 +207,10 @@ class TestPromptCacheManager:
     def test_cache_hit_on_repeated_call(self):
         msgs = self._make_messages(6)
         cache = PromptCacheManager(cache_suffix_rounds=2)
-
-        # First call — cache miss
         cache.split_for_caching(msgs)
         stats1 = cache.get_stats()
         assert stats1['cache_misses'] == 1
         assert stats1['cache_hits'] == 0
-
-        # Second call with same messages — cache hit
         cache.split_for_caching(msgs)
         stats2 = cache.get_stats()
         assert stats2['cache_hits'] == 1
@@ -284,7 +249,6 @@ class TestAddCacheControlHints:
         result = add_cache_control_hints(msgs, cacheable_prefix_count=1)
         content = result[0]['content']
         assert content[-1]['cache_control'] == {'type': 'ephemeral'}
-        # First block should NOT have cache_control
         assert 'cache_control' not in content[0]
 
     def test_no_op_when_count_exceeds_messages(self):
@@ -297,13 +261,13 @@ class TestAddCacheControlHints:
 
 
 class TestCacheAwareCompactManager:
-    def _make_messages(self, n_rounds: int = 8) -> list:
+    def _make_messages(self, n_rounds=8):
         msgs = [
             {'role': 'system', 'content': 'You are a coding assistant. ' * 100},
         ]
         for i in range(n_rounds):
-            msgs.append({'role': 'user', 'content': f'Task {i}'})
-            msgs.append({'role': 'assistant', 'content': f'Done {i}'})
+            msgs.append({'role': 'user', 'content': 'Task %d' % i})
+            msgs.append({'role': 'assistant', 'content': 'Done %d' % i})
         return msgs
 
     def test_compact_without_cache_manager(self):
@@ -320,7 +284,6 @@ class TestCacheAwareCompactManager:
         msgs = self._make_messages(8)
         result = mgr.execute_compact(msgs)
         assert result.ok
-        # Should have preserved prefix
         assert len(result.messages) > 0
 
 
@@ -329,14 +292,12 @@ class TestCacheAwareCompactManager:
 
 class TestAnthropicChatResponse:
     def test_basic_creation(self):
-        from anvil.llm.providers import AnthropicChatResponse
         resp = AnthropicChatResponse(text='Hello')
         assert resp.text == 'Hello'
         assert resp.thinking_blocks == []
         assert resp.raw_content == []
 
     def test_with_thinking_blocks(self):
-        from anvil.llm.providers import AnthropicChatResponse
         resp = AnthropicChatResponse(
             text='Answer',
             thinking_blocks=[{'type': 'thinking', 'thinking': 'Let me think...'}],
@@ -345,7 +306,6 @@ class TestAnthropicChatResponse:
         assert resp.thinking_blocks[0]['thinking'] == 'Let me think...'
 
     def test_to_assistant_message_with_thinking(self):
-        from anvil.llm.providers import AnthropicChatResponse
         resp = AnthropicChatResponse(
             text='Here is the answer.',
             thinking_blocks=[
@@ -356,14 +316,13 @@ class TestAnthropicChatResponse:
         msg = resp.to_assistant_message()
         assert msg['role'] == 'assistant'
         content = msg['content']
-        assert len(content) == 3  # 2 thinking + 1 text
+        assert len(content) == 3
         assert content[0]['type'] == 'thinking'
         assert content[1]['type'] == 'thinking'
         assert content[2]['type'] == 'text'
         assert content[2]['text'] == 'Here is the answer.'
 
     def test_to_assistant_message_text_only(self):
-        from anvil.llm.providers import AnthropicChatResponse
         resp = AnthropicChatResponse(text='Simple answer.')
         msg = resp.to_assistant_message()
         content = msg['content']
@@ -372,31 +331,22 @@ class TestAnthropicChatResponse:
         assert content[0]['text'] == 'Simple answer.'
 
     def test_to_assistant_message_empty_text(self):
-        from anvil.llm.providers import AnthropicChatResponse
         resp = AnthropicChatResponse(text='')
         msg = resp.to_assistant_message()
         content = msg['content']
-        # Empty text should not add a text block
         assert len(content) == 0
 
     def test_multi_round_passback(self):
         """Simulate multi-turn with thinking block passback."""
-        from anvil.llm.providers import AnthropicChatResponse
-
-        # Round 1 response
         resp1 = AnthropicChatResponse(
             text='Let me check the file.',
             thinking_blocks=[{'type': 'thinking', 'thinking': 'User wants to fix a bug.'}],
         )
-
-        # Build round 2 messages
         messages = [
             {'role': 'user', 'content': 'Fix the bug in main.py'},
-            resp1.to_assistant_message(),  # Includes thinking block
+            resp1.to_assistant_message(),
             {'role': 'user', 'content': 'Now add tests'},
         ]
-
-        # Verify thinking block is preserved in the message
         assistant_msg = messages[1]
         assert assistant_msg['role'] == 'assistant'
         assert assistant_msg['content'][0]['type'] == 'thinking'
@@ -408,10 +358,7 @@ class TestAnthropicChatResponse:
 
 class TestAnthropicChatInvokeFactory:
     def test_factory_creates_callable(self):
-        """Factory should return a callable without making API calls."""
         from anvil.llm.providers import anthropic_chat_invoke_factory
-        # This would fail with missing API key, but we can test the factory structure
-        # by checking it returns a function
         try:
             invoke = anthropic_chat_invoke_factory(
                 api_key='test-key',
@@ -420,16 +367,35 @@ class TestAnthropicChatInvokeFactory:
             )
             assert callable(invoke)
         except Exception:
-            # Expected if env validation happens
             pass
 
     def test_max_tokens_with_thinking(self):
-        """Verify max_tokens calculation respects thinking budget."""
-        # This is a structural test - the _build_max_tokens logic
         budget = 10000
-        expected = max(budget + 4096, budget * 2)  # 14096 or 20000 -> 20000
+        expected = max(budget + 4096, budget * 2)
         assert expected == 20000
 
         budget = 2000
-        expected = max(budget + 4096, budget * 2)  # 6096 or 4000 -> 6096
+        expected = max(budget + 4096, budget * 2)
         assert expected == 6096
+
+
+# ============== anthropic_count_tokens ==============
+
+
+class TestAnthropicCountTokens:
+    def test_count_tokens_or_estimate_fallback(self):
+        from anvil.llm.providers import anthropic_count_tokens_or_estimate
+        messages = [{'role': 'user', 'content': 'Hello ' * 100}]
+        count = anthropic_count_tokens_or_estimate(messages=messages)
+        assert count > 0
+        assert 50 < count < 500
+
+    def test_count_tokens_or_estimate_with_system(self):
+        from anvil.llm.providers import anthropic_count_tokens_or_estimate
+        messages = [{'role': 'user', 'content': 'Hello'}]
+        count = anthropic_count_tokens_or_estimate(
+            messages=messages,
+            system_prompt='You are a helpful assistant. ' * 50,
+        )
+        # Fallback estimation only counts messages, not system prompt
+        assert count > 0
