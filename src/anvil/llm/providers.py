@@ -888,8 +888,11 @@ def _anthropic_file_tools() -> list[dict[str, object]]:
             },
         },
     ]
-    # Mark the last tool with cache_control for prompt caching.
+    # Add cache_control to the last tool definition.
     # Claude caches everything up to and including the marked block.
+    # Since tool definitions are static across requests, this is an ideal
+    # cache target: first call creates cache (1.25x cost), subsequent
+    # calls read from cache (0.1x cost) for 5 minutes.
     if tools:
         tools[-1]['cache_control'] = {'type': 'ephemeral'}
     return tools
