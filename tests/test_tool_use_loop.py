@@ -12,7 +12,7 @@ import _bootstrap  # noqa: F401
 
 from anvil.core.types import StepContext
 from anvil.skills import SkillLoader
-from anvil.compression import CompressionConfig, TranscriptEntry
+from anvil.compression import CompactConfig, TranscriptEntry
 from anvil.task_graph import Task, TaskGraph
 from anvil.task_store import TaskStore
 from anvil.tool_use_loop import ToolUseState, make_tool_use_step
@@ -461,7 +461,7 @@ class ToolUseLoopTests(unittest.TestCase):
             step = make_tool_use_step(
                 decider=decider,
                 workspace_root=tmp_dir,
-                compression_config=CompressionConfig(micro_keep_last_results=3, max_context_tokens=50000),
+                compression_config=CompactConfig(micro_keep_last_results=3, max_context_tokens=50000),
             )
             context = StepContext(
                 goal='x',
@@ -490,7 +490,7 @@ class ToolUseLoopTests(unittest.TestCase):
             step = make_tool_use_step(
                 decider=decider,
                 workspace_root=tmp_dir,
-                compression_config=CompressionConfig(max_context_tokens=5),
+                compression_config=CompactConfig(max_context_tokens=5),
                 transcripts_dir=transcripts_dir,
                 summarizer=lambda goal, previous_summary, transcript: 'compressed summary',
             )

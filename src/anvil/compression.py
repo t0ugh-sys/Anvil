@@ -32,6 +32,14 @@ __all__ = [
     'partial_compact_messages',
     'TranscriptEntry',
     'MessageGroup',
+    # Hierarchical Summary
+    'SummaryLevel',
+    'HierarchicalSummarizer',
+    'hierarchical_compact_messages',
+    # Prompt Caching
+    'CacheSegment',
+    'PromptCacheManager',
+    'add_cache_control_hints',
 ]
 
 # Compression thresholds (fraction of max_context_tokens)
@@ -524,21 +532,26 @@ def prepare_compact_prompt(
 class CompactManager:
     """
     多层压缩管理器。
-    
+
     层级:
     1. Micro - 工具结果截断 (无损)
     2. Partial - 按轮次归档 (轻微损)
     3. Full - LLM 摘要 (有损)
+
+    Cache-aware mode: When prompt_cache_manager is set, compression
+    preserves the cacheable prefix to maximize prompt cache hits.
     """
-    
+
     def __init__(
         self,
         config: Optional[CompactConfig] = None,
         summary_provider: Optional[Callable[[str, List[Dict[str, Any]]], str]] = None,
+        prompt_cache_manager: Optional['PromptCacheManager'] = None,
     ):
         self.config = config or CompactConfig()
         self.summary_provider = summary_provider  # LLM 摘要生成函数
-        
+        self.prompt_cache_manager = prompt_cache_manager
+
         self._state = CompactState()
         self._requested = False
         self._request_reason = ''
@@ -663,13 +676,44 @@ class CompactManager:
         )
     
     def _execute_partial(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """执行部分压缩"""
+        """执行部分压缩（缓存感知）。
+
+        When prompt_cache_manager is set, only compresses messages AFTER
+        the cache boundary to preserve cache hits.
+        """
+        if self.prompt_cache_manager is not None:
+            return self._cache_aware_partial(messages)
         return partial_compact_messages(
             messages,
             max_rounds=self.config.partial_max_rounds,
             keep_recent_rounds=self.config.partial_keep_recent_rounds,
             summary=self._state.summary,
         )
+
+    def _cache_aware_partial(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Cache-aware partial compaction.
+
+        Uses PromptCacheManager to identify the stable cacheable prefix,
+        then only compacts messages in the dynamic suffix. This ensures
+        the API-level prompt cache stays valid across compaction.
+        """
+        assert self.prompt_cache_manager is not None
+        prefix, suffix = self.prompt_cache_manager.split_for_caching(messages)
+
+        if not suffix:
+            # Everything is in the prefix — nothing to compact
+            return messages
+
+        # Compact only the suffix
+        compacted_suffix = partial_compact_messages(
+            suffix,
+            max_rounds=self.config.partial_max_rounds,
+            keep_recent_rounds=self.config.partial_keep_recent_rounds,
+            summary=self._state.summary,
+        )
+
+        # Reassemble: preserved prefix + compacted suffix
+        return prefix + compacted_suffix
     
     def _execute_full(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """执行完全压缩（需要 LLM）"""
@@ -733,3 +777,684 @@ def archive_compacted_messages(
     )
     
     return path
+
+
+# ============== Importance Scoring ==============
+# Based on Zero2Agent article #20: Context Compression & Optimization
+# Hybrid scoring: score = w_recency * recency + w_relevance * relevance + w_importance * importance
+
+
+# Keywords that signal important content (decisions, commitments, facts)
+_DECISION_KEYWORDS = frozenset({
+    'decided', 'decision', 'chose', 'chosen', 'agreed', 'approved',
+    'confirmed', 'final', 'conclusion', 'resolved', 'must', 'shall',
+    'requirement', 'constraint', 'blocked', 'critical', 'priority',
+    '决定', '确认', '必须', '关键', '结论', '阻塞', '优先',
+})
+
+_QUESTION_KEYWORDS = frozenset({
+    '?', 'why', 'how', 'what', 'when', 'where', 'which',
+    'should', 'could', 'would',
+    '为什么', '怎么', '什么', '何时', '哪个', '是否',
+})
+
+_ERROR_KEYWORDS = frozenset({
+    'error', 'failed', 'failure', 'exception', 'traceback',
+    'bug', 'broken', 'crash', 'regression',
+    '错误', '失败', '异常', '崩溃',
+})
+
+
+def score_message_importance(
+    message: Dict[str, Any],
+    *,
+    position: int = 0,
+    total_messages: int = 1,
+    recency_weight: float = 0.4,
+    relevance_weight: float = 0.3,
+    importance_weight: float = 0.3,
+) -> float:
+    """Score a message's importance for context filtering.
+
+    Inspired by Zero2Agent hybrid scoring formula:
+        score = w_recency * recency + w_relevance * relevance + w_importance * importance
+
+    Args:
+        message: The message dict to score.
+        position: Index of this message in the list (0 = oldest).
+        total_messages: Total number of messages.
+        recency_weight: Weight for recency score.
+        relevance_weight: Weight for relevance score.
+        importance_weight: Weight for importance score.
+
+    Returns:
+        Score between 0.0 and 1.0.
+    """
+    # --- Recency score (newer = higher) ---
+    if total_messages > 1:
+        recency = position / (total_messages - 1)
+    else:
+        recency = 1.0
+
+    # --- Content importance score ---
+    content = _extract_text_content(message)
+    role = message.get('role', '')
+    content_lower = content.lower()
+
+    importance = 0.0
+
+    # System messages are always important
+    if role == 'system':
+        importance += 0.5
+
+    # User messages slightly more important than assistant
+    if role == 'user':
+        importance += 0.15
+    elif role == 'assistant':
+        importance += 0.1
+
+    # Decision keywords boost
+    decision_hits = sum(1 for kw in _DECISION_KEYWORDS if kw in content_lower)
+    importance += min(0.3, decision_hits * 0.1)
+
+    # Error messages are important for debugging
+    error_hits = sum(1 for kw in _ERROR_KEYWORDS if kw in content_lower)
+    importance += min(0.2, error_hits * 0.1)
+
+    # Questions are moderately important
+    question_hits = sum(1 for kw in _QUESTION_KEYWORDS if kw in content_lower)
+    importance += min(0.1, question_hits * 0.05)
+
+    # Tool results with errors are more important than successful ones
+    if role == 'tool':
+        is_error = message.get('is_error', False)
+        if is_error:
+            importance += 0.2
+
+    # Longer content tends to be more information-dense
+    if len(content) > 500:
+        importance += 0.1
+
+    importance = min(1.0, importance)
+
+    # --- Relevance score (heuristic: tool calls near the end are relevant) ---
+    # Without embeddings, use a simple heuristic: messages with tool_use
+    # blocks are operationally relevant
+    relevance = 0.0
+    if role == 'assistant':
+        tool_calls = message.get('tool_calls', [])
+        if tool_calls:
+            relevance += 0.3
+    if role == 'tool':
+        relevance += 0.2  # tool results are contextually relevant
+
+    # Combine scores
+    score = (
+        recency_weight * recency
+        + relevance_weight * relevance
+        + importance_weight * importance
+    )
+
+    return min(1.0, score)
+
+
+def _extract_text_content(message: Dict[str, Any]) -> str:
+    """Extract text content from a message (handles string and block formats)."""
+    content = message.get('content', '')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    parts.append(block.get('text', ''))
+                elif block.get('type') == 'tool_result':
+                    parts.append(str(block.get('content', '')))
+        return ' '.join(parts)
+    return str(content) if content else ''
+
+
+def filter_messages_by_importance(
+    messages: List[Dict[str, Any]],
+    *,
+    min_score: float = 0.2,
+    always_keep_recent: int = 6,
+    always_keep_system: bool = True,
+) -> List[Dict[str, Any]]:
+    """Filter messages by importance score, keeping the most relevant ones.
+
+    Always preserves:
+    - System messages (if always_keep_system=True)
+    - The most recent N messages (always_keep_recent)
+
+    Args:
+        messages: List of message dicts.
+        min_score: Minimum importance score to keep (0.0-1.0).
+        always_keep_recent: Number of recent messages to always keep.
+        always_keep_system: Whether to always keep system messages.
+
+    Returns:
+        Filtered list of messages, preserving order.
+    """
+    if not messages:
+        return messages
+
+    total = len(messages)
+
+    # Score all messages
+    scored = []
+    for i, msg in enumerate(messages):
+        score = score_message_importance(msg, position=i, total_messages=total)
+        scored.append((i, msg, score))
+
+    # Always keep system messages
+    keep_indices: set = set()
+    for i, msg, score in scored:
+        if always_keep_system and msg.get('role') == 'system':
+            keep_indices.add(i)
+
+    # Always keep recent messages
+    for i in range(max(0, total - always_keep_recent), total):
+        keep_indices.add(i)
+
+    # Keep messages above threshold
+    for i, msg, score in scored:
+        if score >= min_score:
+            keep_indices.add(i)
+
+    # Reconstruct in order
+    return [msg for i, msg, _ in scored if i in keep_indices]
+
+
+# ============== Hierarchical Summary ==============
+# Based on Zero2Agent article #20: Multi-level context summarization
+# L1: Per-round summaries (tool calls & outcomes)
+# L2: Block summaries (group of rounds on related topics)
+# L3: Global summary (entire conversation arc)
+
+
+@dataclass
+class SummaryLevel:
+    """A single level in the hierarchical summary."""
+    level: int  # 1, 2, or 3
+    content: str
+    round_range: Tuple[int, int]  # (start_round, end_round)
+    token_count: int = 0
+
+
+class HierarchicalSummarizer:
+    """Multi-level hierarchical summarization for long conversations.
+
+    Produces three levels of summaries:
+    - L1 (Per-round): One-line summary per tool-use round
+    - L2 (Block): Groups of 5-10 L1 summaries into thematic blocks
+    - L3 (Global): Single paragraph covering the entire conversation
+
+    The LLM can then use the appropriate level depending on how much
+    context it needs — L3 for overview, L2 for recent topic context,
+    L1 for detailed per-round recall.
+    """
+
+    def __init__(
+        self,
+        summary_provider: Optional[Callable[[str, str], str]] = None,
+        l1_per_round: bool = True,
+        l2_block_size: int = 5,
+    ):
+        """
+        Args:
+            summary_provider: Callable(system_prompt, text) -> summary.
+                If None, uses deterministic (non-LLM) extraction.
+            l1_per_round: Whether to generate L1 per-round summaries.
+            l2_block_size: Number of L1 summaries per L2 block.
+        """
+        self.summary_provider = summary_provider
+        self.l1_per_round = l1_per_round
+        self.l2_block_size = l2_block_size
+
+    def summarize(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        max_l1_tokens: int = 2000,
+        max_l2_tokens: int = 500,
+        max_l3_tokens: int = 300,
+    ) -> List[SummaryLevel]:
+        """Generate hierarchical summaries for the given messages.
+
+        Returns a list of SummaryLevel objects, ordered L1 -> L2 -> L3.
+        If LLM provider is not available, uses deterministic extraction.
+        """
+        groups = group_messages_by_rounds(messages)
+        if not groups:
+            return []
+
+        levels: List[SummaryLevel] = []
+
+        # --- L1: Per-round summaries ---
+        l1_summaries: List[Tuple[int, str]] = []
+        for group in groups:
+            summary = self._summarize_round(group)
+            l1_summaries.append((group.round_id, summary))
+
+        if l1_summaries:
+            first_round = l1_summaries[0][0]
+            last_round = l1_summaries[-1][0]
+            l1_content = '\n'.join(
+                f'Round {rid}: {s}' for rid, s in l1_summaries
+            )
+            # Truncate if too long
+            if len(l1_content) > max_l1_tokens * 4:  # ~4 chars/token
+                l1_content = l1_content[:max_l1_tokens * 4] + '...[truncated]'
+            levels.append(SummaryLevel(
+                level=1,
+                content=l1_content,
+                round_range=(first_round, last_round),
+                token_count=estimate_tokens(l1_content),
+            ))
+
+        # --- L2: Block summaries ---
+        if len(l1_summaries) > self.l2_block_size:
+            l2_blocks = self._group_into_blocks(l1_summaries)
+            l2_content_parts: List[str] = []
+            for block_start, block_rounds in l2_blocks:
+                block_text = '\n'.join(
+                    f'  Round {rid}: {s}' for rid, s in block_rounds
+                )
+                if self.summary_provider:
+                    prompt = (
+                        'Summarize these conversation rounds in 1-2 sentences:\n'
+                        f'{block_text}'
+                    )
+                    block_summary = self.summary_provider('You are a summarizer.', prompt)
+                else:
+                    block_summary = self._deterministic_block_summary(block_rounds)
+                block_end = block_rounds[-1][0]
+                l2_content_parts.append(
+                    f'Rounds {block_start}-{block_end}: {block_summary}'
+                )
+
+            l2_content = '\n'.join(l2_content_parts)
+            if len(l2_content) > max_l2_tokens * 4:
+                l2_content = l2_content[:max_l2_tokens * 4] + '...[truncated]'
+            levels.append(SummaryLevel(
+                level=2,
+                content=l2_content,
+                round_range=(l1_summaries[0][0], l1_summaries[-1][0]),
+                token_count=estimate_tokens(l2_content),
+            ))
+
+        # --- L3: Global summary ---
+        l3_source = l1_content if not levels or len(l1_summaries) <= self.l2_block_size else l2_content
+        if self.summary_provider:
+            prompt = (
+                'Summarize this entire conversation in one concise paragraph '
+                '(max 200 words), focusing on goals, key decisions, and current state:\n'
+                f'{l3_source}'
+            )
+            l3_content = self.summary_provider('You are a summarizer.', prompt)
+        else:
+            l3_content = self._deterministic_global_summary(l1_summaries)
+
+        if len(l3_content) > max_l3_tokens * 4:
+            l3_content = l3_content[:max_l3_tokens * 4] + '...[truncated]'
+        levels.append(SummaryLevel(
+            level=3,
+            content=l3_content,
+            round_range=(l1_summaries[0][0], l1_summaries[-1][0]),
+            token_count=estimate_tokens(l3_content),
+        ))
+
+        return levels
+
+    def _summarize_round(self, group: MessageGroup) -> str:
+        """Generate a one-line summary for a single round."""
+        tool_names: List[str] = []
+        tool_outcomes: List[str] = []
+        user_text = ''
+        assistant_text = ''
+
+        for msg in group.messages:
+            role = msg.get('role', '')
+            content = msg.get('content', [])
+
+            if role == 'user':
+                text = _extract_text_content(msg)
+                if text:
+                    user_text = text[:100]
+
+            elif role == 'assistant':
+                text = _extract_text_content(msg)
+                if text:
+                    assistant_text = text[:100]
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get('type') == 'tool_use':
+                            tool_names.append(block.get('name', '?'))
+
+            elif role == 'tool':
+                is_error = msg.get('is_error', False)
+                tool_outcomes.append('error' if is_error else 'ok')
+
+        parts: List[str] = []
+        if user_text:
+            parts.append(user_text[:60])
+        if tool_names:
+            outcomes = ', '.join(tool_outcomes) if tool_outcomes else ''
+            parts.append(f'tools: [{", ".join(tool_names)}] ({outcomes})')
+        if assistant_text and not tool_names:
+            parts.append(assistant_text[:60])
+
+        return ' | '.join(parts) if parts else '(empty round)'
+
+    def _group_into_blocks(
+        self,
+        l1_summaries: List[Tuple[int, str]],
+    ) -> List[Tuple[int, List[Tuple[int, str]]]]:
+        """Group L1 summaries into blocks of l2_block_size."""
+        blocks: List[Tuple[int, List[Tuple[int, str]]]] = []
+        for i in range(0, len(l1_summaries), self.l2_block_size):
+            chunk = l1_summaries[i:i + self.l2_block_size]
+            blocks.append((chunk[0][0], chunk))
+        return blocks
+
+    def _deterministic_block_summary(
+        self,
+        block_rounds: List[Tuple[int, str]],
+    ) -> str:
+        """Non-LLM block summary: extract tool usage stats."""
+        tool_counts: Dict[str, int] = {}
+        error_count = 0
+        for _, summary in block_rounds:
+            if 'error' in summary.lower():
+                error_count += 1
+            # Extract tool names from "tools: [x, y]" pattern
+            import re
+            match = re.search(r'tools: \[([^\]]+)\]', summary)
+            if match:
+                for t in match.group(1).split(','):
+                    t = t.strip()
+                    if t:
+                        tool_counts[t] = tool_counts.get(t, 0) + 1
+
+        parts = [f'{len(block_rounds)} rounds']
+        if tool_counts:
+            top_tools = sorted(tool_counts.items(), key=lambda x: -x[1])[:3]
+            parts.append(f'top tools: {", ".join(f"{t}({c})" for t, c in top_tools)}')
+        if error_count:
+            parts.append(f'{error_count} errors')
+        return '; '.join(parts)
+
+    def _deterministic_global_summary(
+        self,
+        l1_summaries: List[Tuple[int, str]],
+    ) -> str:
+        """Non-LLM global summary."""
+        total = len(l1_summaries)
+        error_rounds = sum(1 for _, s in l1_summaries if 'error' in s.lower())
+        tool_rounds = sum(1 for _, s in l1_summaries if 'tools:' in s)
+        return (
+            f'{total} rounds total, {tool_rounds} with tool calls, '
+            f'{error_rounds} with errors.'
+        )
+
+
+def hierarchical_compact_messages(
+    messages: List[Dict[str, Any]],
+    *,
+    summarizer: HierarchicalSummarizer,
+    keep_recent_rounds: int = 3,
+    summary_level: int = 2,  # Which level to inject (1, 2, or 3)
+) -> List[Dict[str, Any]]:
+    """Apply hierarchical summarization to compress messages.
+
+    Replaces older rounds with the appropriate summary level,
+    keeping the most recent rounds intact.
+
+    Args:
+        messages: Full message list.
+        summarizer: Configured HierarchicalSummarizer instance.
+        keep_recent_rounds: Number of recent rounds to preserve verbatim.
+        summary_level: Which summary level to inject (1=detailed, 3=brief).
+
+    Returns:
+        Compressed message list with summary prepended.
+    """
+    groups = group_messages_by_rounds(messages)
+    if len(groups) <= keep_recent_rounds:
+        return messages
+
+    # Generate summaries
+    levels = summarizer.summarize(messages)
+    if not levels:
+        return messages
+
+    # Find the requested summary level (or closest available)
+    target_level = next(
+        (lv for lv in levels if lv.level == summary_level),
+        levels[-1],  # fallback to most compressed
+    )
+
+    # Build result: summary + recent rounds
+    result: List[Dict[str, Any]] = [
+        {
+            'role': 'system',
+            'content': f'[Hierarchical Summary L{target_level.level}]\n{target_level.content}',
+        }
+    ]
+    for group in groups[-keep_recent_rounds:]:
+        result.extend(group.messages)
+
+    return result
+
+
+# ============== Prompt Caching ==============
+# Based on Zero2Agent article #20 & API provider caching patterns
+# Maintains a stable prefix to maximize cache hits with providers
+# that support prompt caching (e.g. Claude, OpenAI).
+
+
+@dataclass
+class CacheSegment:
+    """A segment of the prompt that can be cached."""
+    content_hash: str  # SHA-256 of the content
+    token_count: int
+    messages: List[Dict[str, Any]]
+    created_at: float = 0.0
+    hit_count: int = 0
+
+
+class PromptCacheManager:
+    """Manages prompt caching to reduce costs and latency.
+
+    Maintains a stable prefix of system + early conversation messages
+    that rarely change, maximizing cache hits with API providers that
+    support prefix caching (Claude, OpenAI).
+
+    Strategy:
+    - The system message(s) form the base cache layer (almost always identical)
+    - Early conversation rounds that haven't been compacted form the second layer
+    - Recent messages change frequently and are NOT cached
+
+    Usage:
+        cache = PromptCacheManager()
+        # Build cacheable prefix
+        prefix, suffix = cache.split_for_caching(messages)
+        # Provider can cache prefix; suffix changes each turn
+    """
+
+    def __init__(
+        self,
+        *,
+        min_cacheable_tokens: int = 1024,  # Providers need ≥1024 tokens to cache
+        cache_suffix_rounds: int = 2,  # Recent rounds NOT cached
+    ):
+        self.min_cacheable_tokens = min_cacheable_tokens
+        self.cache_suffix_rounds = cache_suffix_rounds
+        self._segments: List[CacheSegment] = []
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    def split_for_caching(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Split messages into (cacheable_prefix, dynamic_suffix).
+
+        The prefix is stable across turns (system + early conversation)
+        and should be sent with cache_control hints to the provider.
+        The suffix changes every turn and is sent fresh.
+
+        Returns:
+            (prefix_messages, suffix_messages)
+        """
+        if not messages:
+            return [], []
+
+        groups = group_messages_by_rounds(messages)
+
+        if len(groups) <= self.cache_suffix_rounds + 1:
+            # Too few rounds — cache just the system message(s)
+            system_msgs = [m for m in messages if m.get('role') == 'system']
+            rest = [m for m in messages if m.get('role') != 'system']
+            prefix_tokens = estimate_messages_tokens(system_msgs)
+            if prefix_tokens >= self.min_cacheable_tokens:
+                return system_msgs, rest
+            return [], messages
+
+        # Split: everything up to (total - suffix_rounds) goes in prefix
+        split_round = len(groups) - self.cache_suffix_rounds
+        prefix_msgs: List[Dict[str, Any]] = []
+        suffix_msgs: List[Dict[str, Any]] = []
+
+        for i, group in enumerate(groups):
+            if i < split_round:
+                prefix_msgs.extend(group.messages)
+            else:
+                suffix_msgs.extend(group.messages)
+
+        prefix_tokens = estimate_messages_tokens(prefix_msgs)
+
+        # If prefix is too small, move more into it
+        if prefix_tokens < self.min_cacheable_tokens and split_round > 1:
+            # Just put everything in prefix except last round
+            prefix_msgs = []
+            suffix_msgs = []
+            for i, group in enumerate(groups):
+                if i < len(groups) - 1:
+                    prefix_msgs.extend(group.messages)
+                else:
+                    suffix_msgs.extend(group.messages)
+
+        # Update segment tracking
+        content_hash = self._hash_messages(prefix_msgs)
+        self._update_segment(content_hash, prefix_msgs)
+
+        return prefix_msgs, suffix_msgs
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        total = self._cache_hits + self._cache_misses
+        return {
+            'segments': len(self._segments),
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'hit_rate': self._cache_hits / total if total > 0 else 0.0,
+            'total_cached_tokens': sum(s.token_count for s in self._segments),
+        }
+
+    def _hash_messages(self, messages: List[Dict[str, Any]]) -> str:
+        """Compute a hash of messages for cache identity."""
+        import hashlib
+        # Use a deterministic serialization
+        parts = []
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            if isinstance(content, list):
+                # Sort blocks for determinism
+                for block in content:
+                    if isinstance(block, dict):
+                        parts.append(f"{role}:{block.get('type', '')}:{hash(str(block))}")
+            else:
+                parts.append(f"{role}:{hash(str(content))}")
+        combined = '|'.join(parts)
+        return hashlib.sha256(combined.encode('utf-8')).hexdigest()[:16]
+
+    def _update_segment(self, content_hash: str, messages: List[Dict[str, Any]]) -> None:
+        """Update segment tracking on each call."""
+        now = time.time()
+        for seg in self._segments:
+            if seg.content_hash == content_hash:
+                seg.hit_count += 1
+                self._cache_hits += 1
+                return
+
+        # New segment — cache miss
+        self._cache_misses += 1
+        self._segments.append(CacheSegment(
+            content_hash=content_hash,
+            token_count=estimate_messages_tokens(messages),
+            messages=messages,
+            created_at=now,
+        ))
+
+        # Keep only the most recent 5 segments to limit memory
+        if len(self._segments) > 5:
+            self._segments = sorted(
+                self._segments,
+                key=lambda s: s.created_at,
+                reverse=True,
+            )[:5]
+
+
+def add_cache_control_hints(
+    messages: List[Dict[str, Any]],
+    *,
+    cacheable_prefix_count: int,
+) -> List[Dict[str, Any]]:
+    """Add cache_control hints to the last message in the cacheable prefix.
+
+    This is provider-specific: Anthropic Claude uses a `cache_control`
+    field on content blocks to mark breakpoints. Other providers may
+    use different mechanisms.
+
+    Args:
+        messages: Full message list.
+        cacheable_prefix_count: Number of messages in the cacheable prefix.
+
+    Returns:
+        Modified messages with cache_control hints added.
+    """
+    if cacheable_prefix_count <= 0 or cacheable_prefix_count > len(messages):
+        return messages
+
+    result = [dict(msg) for msg in messages]  # shallow copy
+
+    # Add ephemeral cache_control to the last prefix message
+    idx = cacheable_prefix_count - 1
+    msg = result[idx]
+    content = msg.get('content', '')
+
+    if isinstance(content, str):
+        # Convert string content to block format with cache_control
+        result[idx] = {
+            **msg,
+            'content': [
+                {
+                    'type': 'text',
+                    'text': content,
+                    'cache_control': {'type': 'ephemeral'},
+                }
+            ],
+        }
+    elif isinstance(content, list) and content:
+        # Add cache_control to the last content block
+        new_content = list(content)
+        last_block = dict(new_content[-1])
+        last_block['cache_control'] = {'type': 'ephemeral'}
+        new_content[-1] = last_block
+        result[idx] = {**msg, 'content': new_content}
+
+    return result

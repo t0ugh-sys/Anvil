@@ -6,6 +6,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Set
 
 InvokeFn = Callable[[str], str]
@@ -15,8 +16,19 @@ from ..retry import NonRetryableError, RetryExhausted, with_retry
 
 __all__ = [
     'ProviderHttpError',
+    'TokenUsageRecord',
+    'TokenUsageTracker',
+    'CostTracker',
+    'BatchRequest',
+    'BatchResult',
+    'AnthropicBatchClient',
     'build_invoke_from_args',
     'anthropic_invoke_factory',
+    'anthropic_chat_invoke_factory',
+    'anthropic_stream_invoke_factory',
+    'anthropic_count_tokens',
+    'anthropic_count_tokens_or_estimate',
+    'AnthropicChatResponse',
     'gemini_invoke_factory',
     'openai_compatible_chat_invoke_factory',
     'list_providers',
@@ -24,9 +36,453 @@ __all__ = [
     'parse_provider_headers',
     'InvokeFn',
     'ChatInvokeFn',
+    'PromptCache',
 ]
 
 DEFAULT_RETRY_HTTP_CODES: Set[int] = {502, 503, 504, 524}
+
+
+# ============== Token Usage Tracking ==============
+# Based on Claude API docs: response.usage contains precise token counts.
+# Tracks input_tokens, output_tokens, cache_creation, cache_read.
+
+
+@dataclass
+class TokenUsageRecord:
+    """A single API call's token usage."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    model: str = ''
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def cache_hit_ratio(self) -> float:
+        """Fraction of input tokens served from cache (0.0-1.0)."""
+        total = self.input_tokens + self.cache_read_input_tokens
+        if total <= 0:
+            return 0.0
+        return self.cache_read_input_tokens / total
+
+
+class TokenUsageTracker:
+    """Tracks cumulative token usage across API calls.
+
+    Each Anthropic API response includes a ``usage`` field with exact
+    token counts. This tracker accumulates them for cost monitoring.
+
+    Usage::
+
+        tracker = TokenUsageTracker()
+        invoke = anthropic_invoke_factory(..., usage_tracker=invoke)
+        result = invoke(prompt)
+        print(tracker.summary())
+    """
+
+    def __init__(self) -> None:
+        self._records: list[TokenUsageRecord] = []
+
+    def record(self, usage: dict, model: str = '') -> None:
+        """Record token usage from an API response."""
+        self._records.append(TokenUsageRecord(
+            input_tokens=int(usage.get('input_tokens', 0) or 0),
+            output_tokens=int(usage.get('output_tokens', 0) or 0),
+            cache_creation_input_tokens=int(usage.get('cache_creation_input_tokens', 0) or 0),
+            cache_read_input_tokens=int(usage.get('cache_read_input_tokens', 0) or 0),
+            model=model,
+        ))
+
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(r.input_tokens for r in self._records)
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(r.output_tokens for r in self._records)
+
+    @property
+    def total_cache_creation_tokens(self) -> int:
+        return sum(r.cache_creation_input_tokens for r in self._records)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        return sum(r.cache_read_input_tokens for r in self._records)
+
+    @property
+    def call_count(self) -> int:
+        return len(self._records)
+
+    def summary(self) -> dict:
+        return {
+            'calls': self.call_count,
+            'input_tokens': self.total_input_tokens,
+            'output_tokens': self.total_output_tokens,
+            'cache_creation_tokens': self.total_cache_creation_tokens,
+            'cache_read_tokens': self.total_cache_read_tokens,
+            'total_tokens': self.total_input_tokens + self.total_output_tokens,
+            'cache_hit_rate': self.cache_hit_rate,
+            'estimated_cost_savings': self.estimated_cost_savings,
+        }
+
+    def last(self) -> TokenUsageRecord | None:
+        return self._records[-1] if self._records else None
+
+    def reset(self) -> None:
+        self._records.clear()
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """Fraction of input tokens served from cache across all calls (0.0-1.0)."""
+        total_cacheable = self.total_input_tokens + self.total_cache_read_tokens
+        if total_cacheable <= 0:
+            return 0.0
+        return self.total_cache_read_tokens / total_cacheable
+
+    @property
+    def estimated_cost_savings(self) -> dict:
+        """Estimate cost savings from prompt caching.
+
+        Based on Claude API pricing:
+        - Cache write: 1.25x standard input price
+        - Cache read: 0.1x standard input price (90% discount)
+        - Standard input: 1.0x
+
+        Returns dict with estimated costs in abstract units (multiply by
+        model-specific per-token price for actual dollars).
+        """
+        standard_input = self.total_input_tokens
+        cache_write = self.total_cache_creation_tokens
+        cache_read = self.total_cache_read_tokens
+
+        # Without caching: all tokens at standard rate
+        cost_without_cache = standard_input * 1.0
+
+        # With caching: creation at 1.25x, reads at 0.1x, rest at 1.0x
+        uncached_tokens = max(0, standard_input - cache_write - cache_read)
+        cost_with_cache = (
+            uncached_tokens * 1.0
+            + cache_write * 1.25
+            + cache_read * 0.1
+        )
+
+        savings = max(0, cost_without_cache - cost_with_cache)
+        return {
+            'cost_without_cache': cost_without_cache,
+            'cost_with_cache': cost_with_cache,
+            'savings': savings,
+            'savings_percent': (savings / cost_without_cache * 100) if cost_without_cache > 0 else 0.0,
+        }
+
+
+# Claude API pricing (per million tokens, as of 2025)
+# Source: https://platform.claude.com/docs/zh-CN/about-claude/models
+_CLAUDE_PRICING = {
+    'claude-opus-4': {'input': 15.0, 'output': 75.0, 'cache_write': 18.75, 'cache_read': 1.5},
+    'claude-sonnet-4': {'input': 3.0, 'output': 15.0, 'cache_write': 3.75, 'cache_read': 0.3},
+    'claude-haiku-3.5': {'input': 0.80, 'output': 4.0, 'cache_write': 1.0, 'cache_read': 0.08},
+    # Default fallback
+    'default': {'input': 3.0, 'output': 15.0, 'cache_write': 3.75, 'cache_read': 0.3},
+}
+
+
+class CostTracker:
+    """Track estimated API costs based on Claude pricing.
+
+    Uses model-specific pricing to estimate actual dollar costs.
+    Integrates with TokenUsageTracker for token counts.
+
+    Usage::
+
+        cost = CostTracker(model='claude-sonnet-4')
+        cost.add_from_tracker(usage_tracker)
+        print(cost.summary())
+    """
+
+    def __init__(self, model: str = 'claude-sonnet-4'):
+        self.model = model
+        self._pricing = self._resolve_pricing(model)
+        self._calls: list = []
+
+    @staticmethod
+    def _resolve_pricing(model: str) -> dict:
+        """Resolve pricing for a model string."""
+        model_lower = model.lower()
+        for key, pricing in _CLAUDE_PRICING.items():
+            if key != 'default' and key in model_lower:
+                return pricing
+        return _CLAUDE_PRICING['default']
+
+    def add(
+        self,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+    ) -> None:
+        """Record a single API call's token usage."""
+        self._calls.append({
+            'input_tokens': input_tokens,
+            'output_tokens': output_tokens,
+            'cache_creation_tokens': cache_creation_tokens,
+            'cache_read_tokens': cache_read_tokens,
+        })
+
+    def add_from_tracker(self, tracker: TokenUsageTracker) -> None:
+        """Import all records from a TokenUsageTracker."""
+        for record in tracker._records:
+            self.add(
+                input_tokens=record.input_tokens,
+                output_tokens=record.output_tokens,
+                cache_creation_tokens=record.cache_creation_input_tokens,
+                cache_read_tokens=record.cache_read_input_tokens,
+            )
+
+    @property
+    def total_cost(self) -> float:
+        """Total estimated cost in dollars."""
+        return sum(self._call_cost(c) for c in self._calls)
+
+    @property
+    def cost_without_cache(self) -> float:
+        """What the cost would be without any caching."""
+        total = 0.0
+        for c in self._calls:
+            total_input = c['input_tokens'] + c['cache_read_tokens']
+            total += (total_input / 1_000_000) * self._pricing['input']
+            total += (c['output_tokens'] / 1_000_000) * self._pricing['output']
+        return total
+
+    @property
+    def savings(self) -> float:
+        """Estimated savings from caching."""
+        return max(0, self.cost_without_cache - self.total_cost)
+
+    def _call_cost(self, call: dict) -> float:
+        """Calculate cost for a single call."""
+        cost = 0.0
+        # Regular input tokens (excluding cache-related)
+        regular_input = max(0, call['input_tokens'] - call['cache_creation_tokens'] - call['cache_read_tokens'])
+        cost += (regular_input / 1_000_000) * self._pricing['input']
+        cost += (call['cache_creation_tokens'] / 1_000_000) * self._pricing['cache_write']
+        cost += (call['cache_read_tokens'] / 1_000_000) * self._pricing['cache_read']
+        cost += (call['output_tokens'] / 1_000_000) * self._pricing['output']
+        return cost
+
+    def summary(self) -> dict:
+        """Return cost summary."""
+        total_input = sum(c['input_tokens'] for c in self._calls)
+        total_output = sum(c['output_tokens'] for c in self._calls)
+        total_cache_create = sum(c['cache_creation_tokens'] for c in self._calls)
+        total_cache_read = sum(c['cache_read_tokens'] for c in self._calls)
+        return {
+            'model': self.model,
+            'calls': len(self._calls),
+            'total_input_tokens': total_input,
+            'total_output_tokens': total_output,
+            'total_cache_creation_tokens': total_cache_create,
+            'total_cache_read_tokens': total_cache_read,
+            'total_cost_usd': round(self.total_cost, 6),
+            'cost_without_cache_usd': round(self.cost_without_cache, 6),
+            'savings_usd': round(self.savings, 6),
+            'savings_percent': round(
+                (self.savings / self.cost_without_cache * 100) if self.cost_without_cache > 0 else 0.0,
+                2,
+            ),
+            'pricing_per_million': self._pricing,
+        }
+
+
+# ============== Claude Batch API ==============
+# Submit multiple requests as a batch for 50% cost savings.
+# Batch processing completes within 24 hours.
+
+
+@dataclass
+class BatchRequest:
+    """A single request in a batch."""
+    custom_id: str
+    prompt: str
+    max_tokens: int = 1024
+    temperature: float = 0.2
+    stop_sequences: List[str] = None
+    thinking_budget_tokens: int = 0
+
+    def to_anthropic_request(self, model: str) -> Dict[str, object]:
+        """Convert to Anthropic batch request format."""
+        params: Dict[str, object] = {
+            'model': model,
+            'max_tokens': self.max_tokens,
+            'temperature': self.temperature,
+            'messages': [{'role': 'user', 'content': self.prompt}],
+        }
+        if self.stop_sequences:
+            params['stop_sequences'] = self.stop_sequences
+        if self.thinking_budget_tokens > 0:
+            params['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': self.thinking_budget_tokens,
+            }
+            params['temperature'] = 1.0
+            params['max_tokens'] = max(self.thinking_budget_tokens + 4096, self.thinking_budget_tokens * 2)
+        return {
+            'custom_id': self.custom_id,
+            'params': params,
+        }
+
+
+@dataclass
+class BatchResult:
+    """Result from a batch request."""
+    custom_id: str
+    text: str = ''
+    error: str = ''
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return not self.error
+
+
+class AnthropicBatchClient:
+    """Claude Batch API client for cost-effective bulk processing.
+
+    Batch API provides 50% cost savings on input/output tokens.
+    Requests are processed within 24 hours (typically much faster).
+
+    Usage::
+
+        client = AnthropicBatchClient(api_key='...', model='claude-sonnet-4')
+        batch_id = client.submit([
+            BatchRequest(custom_id='req1', prompt='Analyze this code...'),
+            BatchRequest(custom_id='req2', prompt='Review this PR...'),
+        ])
+        # ... wait ...
+        results = client.get_results(batch_id)
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = 'claude-sonnet-4',
+        base_url: str = '',
+        timeout_s: float = 30.0,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.base = (base_url.rstrip('/') if base_url else 'https://api.anthropic.com')
+        self.timeout_s = timeout_s
+        self._headers = {
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+        }
+
+    def submit(self, requests: List[BatchRequest]) -> str:
+        """Submit a batch of requests. Returns batch_id."""
+        endpoint = self.base + '/v1/messages/batches'
+        batch_items = [r.to_anthropic_request(self.model) for r in requests]
+        payload = {'requests': batch_items}
+        result = self._post(endpoint, payload)
+        return result.get('id', '')
+
+    def get_status(self, batch_id: str) -> Dict[str, object]:
+        """Check batch status."""
+        endpoint = f'{self.base}/v1/messages/batches/{batch_id}'
+        return self._get(endpoint)
+
+    def get_results(self, batch_id: str) -> List[BatchResult]:
+        """Get results from a completed batch."""
+        status = self.get_status(batch_id)
+        processing = status.get('processing_status', '')
+        if processing != 'ended':
+            return []
+
+        results_url = status.get('results_url', '')
+        if not results_url:
+            return []
+
+        # Fetch results
+        raw_results = self._get_raw(self.base + results_url)
+        results: List[BatchResult] = []
+        for line in raw_results.strip().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+                custom_id = item.get('custom_id', '')
+                result_type = item.get('type', '')
+
+                if result_type == 'succeeded':
+                    msg = item.get('result', {}).get('message', {})
+                    content = msg.get('content', [])
+                    text_parts = [b.get('text', '') for b in content if isinstance(b, dict) and b.get('type') == 'text']
+                    usage = msg.get('usage', {})
+                    results.append(BatchResult(
+                        custom_id=custom_id,
+                        text='\n'.join(text_parts),
+                        input_tokens=int(usage.get('input_tokens', 0)),
+                        output_tokens=int(usage.get('output_tokens', 0)),
+                    ))
+                else:
+                    error = item.get('error', {})
+                    results.append(BatchResult(
+                        custom_id=custom_id,
+                        error=error.get('message', 'unknown error'),
+                    ))
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return results
+
+    def cancel(self, batch_id: str) -> Dict[str, object]:
+        """Cancel a batch."""
+        endpoint = f'{self.base}/v1/messages/batches/{batch_id}/cancel'
+        return self._post(endpoint, {})
+
+    def _post(self, endpoint: str, payload: dict) -> dict:
+        body = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(endpoint, data=body, headers=self._headers, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+    def _get(self, endpoint: str) -> dict:
+        req = urllib.request.Request(endpoint, headers=self._headers, method='GET')
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+    def _get_raw(self, endpoint: str) -> str:
+        req = urllib.request.Request(endpoint, headers=self._headers, method='GET')
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                return resp.read().decode('utf-8')
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
 
 
 class ProviderHttpError(Exception):
@@ -98,6 +554,10 @@ def _anthropic_invoke_factory(
     base_url: str = '',
     debug: bool = False,
     enable_native_tools: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
@@ -106,26 +566,127 @@ def _anthropic_invoke_factory(
         'content-type': 'application/json',
     }
 
+    def _split_system_user(prompt: str) -> Tuple[str, str]:
+        """Split prompt into (system_prompt, user_prompt) for caching.
+
+        When prompt caching is enabled, the system prompt is sent separately
+        with cache_control so it's cached across requests (90% cost reduction
+        on subsequent calls).
+
+        Strategy:
+        1. Look for section markers that separate static instructions from
+           dynamic content (Goal, StateSummary, History, etc.)
+        2. Everything before the first dynamic section = system prompt
+        3. The system prompt must be substantial (≥200 chars) to be worth caching
+        """
+        # Dynamic section markers — everything after these is per-request
+        dynamic_markers = (
+            '\nGoal:\n', '\nGoal: ',
+            '\nUser request:\n', '\nUser:\n',
+            '\nStateSummary:\n',
+            '\nTask:\n', '\nTask: ',
+            '\nCurrent task:\n',
+            '\nInstruction:\n',
+        )
+
+        # Find the earliest dynamic section
+        earliest_idx = len(prompt)
+        for marker in dynamic_markers:
+            idx = prompt.find(marker)
+            if 0 < idx < earliest_idx:
+                earliest_idx = idx
+
+        if earliest_idx < len(prompt):
+            system_part = prompt[:earliest_idx].strip()
+            user_part = prompt[earliest_idx:].strip()
+            # Only split if system part is substantial enough for caching
+            # (Claude API requires ≥1024 tokens to activate caching)
+            if len(system_part) > 200:
+                return system_part, user_part
+
+        return '', prompt
+
+    def _build_max_tokens() -> int:
+        """Calculate max_tokens respecting thinking budget constraints.
+
+        Claude API requires max_tokens > budget_tokens when extended thinking
+        is enabled. Default max_tokens should also be reasonable for the task.
+        """
+        if thinking_budget_tokens > 0:
+            # Ensure max_tokens > budget_tokens (API requirement)
+            # Use budget + 4096 for output, or at least 2x budget
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096 if enable_native_tools else 1024
+
     def _request_once(prompt: str) -> dict:
         request_prompt = prompt
-        payload = {
+        max_tokens = _build_max_tokens()
+
+        payload: Dict[str, object] = {
             'model': model,
-            'max_tokens': 4096 if enable_native_tools else 1024,
+            'max_tokens': max_tokens,
             'temperature': temperature,
-            'messages': [{'role': 'user', 'content': request_prompt}],
         }
+
+        # Stop sequences — halt generation when encountered
+        if stop_sequences:
+            payload['stop_sequences'] = stop_sequences
+
+        # Extended thinking — enable Claude's internal reasoning
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            # Extended thinking requires temperature=1
+            payload['temperature'] = 1.0
+
+        # Prompt caching: split system prompt for separate caching
+        if enable_prompt_caching and not enable_native_tools:
+            system_prompt, user_prompt = _split_system_user(prompt)
+            if system_prompt:
+                payload['system'] = [
+                    {
+                        'type': 'text',
+                        'text': system_prompt,
+                        'cache_control': {'type': 'ephemeral'},
+                    }
+                ]
+                payload['messages'] = [{'role': 'user', 'content': user_prompt}]
+            else:
+                payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+        else:
+            payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+
+        # Native tool use (coding mode)
         if (
             enable_native_tools
             and _prompt_requires_file_tool(prompt)
             and not _prompt_has_successful_tool_result(prompt)
         ):
             request_prompt = _native_tool_prompt(prompt)
-            payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+            if enable_prompt_caching:
+                # Split native tool prompt too
+                system_prompt, user_prompt = _split_system_user(request_prompt)
+                if system_prompt:
+                    payload['system'] = [
+                        {
+                            'type': 'text',
+                            'text': system_prompt,
+                            'cache_control': {'type': 'ephemeral'},
+                        }
+                    ]
+                    payload['messages'] = [{'role': 'user', 'content': user_prompt}]
+                else:
+                    payload['messages'] = [{'role': 'user', 'content': request_prompt}]
+            else:
+                payload['messages'] = [{'role': 'user', 'content': request_prompt}]
             payload['tools'] = _anthropic_file_tools()
             if _prompt_should_force_write_file(prompt):
                 payload['tool_choice'] = {'type': 'tool', 'name': 'write_file'}
             else:
                 payload['tool_choice'] = {'type': 'any'}
+
         return _http_post_json(endpoint, payload, headers, timeout_s)
 
     def invoke(prompt: str) -> str:
@@ -136,6 +697,11 @@ def _anthropic_invoke_factory(
                 retry_backoff_s=retry_backoff_s,
                 retry_http_codes=retry_http_codes,
             )
+            # Track token usage from response
+            if usage_tracker is not None:
+                usage = response.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=model)
             return _extract_anthropic_text(response)
         except ProviderHttpError as exc:
             error_msg = f'Anthropic API error: HTTP {exc.status_code}'
@@ -204,10 +770,17 @@ def _extract_anthropic_tool_use_json(response: dict) -> str:
 
     tool_calls: list[dict[str, object]] = []
     thoughts: list[str] = []
+    thinking_content: list[str] = []
     for block in content:
         if not isinstance(block, dict):
             continue
         block_type = block.get('type')
+        if block_type == 'thinking':
+            # Extended thinking block — capture reasoning
+            thinking_text = block.get('thinking', '')
+            if isinstance(thinking_text, str) and thinking_text.strip():
+                thinking_content.append(thinking_text.strip())
+            continue
         if block_type == 'text':
             text = block.get('text')
             if isinstance(text, str) and text.strip():
@@ -226,9 +799,11 @@ def _extract_anthropic_tool_use_json(response: dict) -> str:
 
     if not tool_calls:
         return ''
+    # Combine thinking and regular thoughts
+    all_thoughts = thinking_content + thoughts
     return json.dumps(
         {
-            'thought': '\n'.join(thoughts),
+            'thought': '\n'.join(all_thoughts),
             'plan': [],
             'tool_calls': tool_calls,
             'final': None,
@@ -256,7 +831,14 @@ def _extract_anthropic_text(response: dict) -> str:
 
 
 def _anthropic_file_tools() -> list[dict[str, object]]:
-    return [
+    """Anthropic native tool definitions with prompt caching support.
+
+    Each tool definition includes cache_control for prompt caching.
+    Tool definitions are static across requests, so they are ideal
+    cache targets. First request creates the cache (10x cost),
+    subsequent requests read from cache (0.1x cost) for 5 minutes.
+    """
+    tools = [
         {
             'name': 'read_file',
             'description': 'Read one UTF-8 file inside the workspace.',
@@ -306,6 +888,14 @@ def _anthropic_file_tools() -> list[dict[str, object]]:
             },
         },
     ]
+    # Add cache_control to the last tool definition.
+    # Claude caches everything up to and including the marked block.
+    # Since tool definitions are static across requests, this is an ideal
+    # cache target: first call creates cache (1.25x cost), subsequent
+    # calls read from cache (0.1x cost) for 5 minutes.
+    if tools:
+        tools[-1]['cache_control'] = {'type': 'ephemeral'}
+    return tools
 
 
 def _prompt_goal(prompt: str) -> str:
@@ -469,14 +1059,448 @@ def anthropic_invoke_factory(
     base_url: str = '',
     debug: bool = False,
     enable_native_tools: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
 ) -> InvokeFn:
-    """Public wrapper for Anthropic provider with optional custom base_url."""
+    """Public wrapper for Anthropic provider with optional custom base_url.
+
+    Args:
+        enable_prompt_caching: When True (default), split system prompt from
+            user prompt and send with cache_control for 90% cost savings on
+            repeated calls. Requires ≥1024 tokens in the cached portion.
+    """
     return _anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
         debug=debug, enable_native_tools=enable_native_tools,
+        usage_tracker=usage_tracker,
+        stop_sequences=stop_sequences,
+        thinking_budget_tokens=thinking_budget_tokens,
+        enable_prompt_caching=enable_prompt_caching,
     )
+
+
+@dataclass
+class AnthropicChatResponse:
+    """Structured response from Anthropic chat with thinking support.
+
+    Contains both the text response and any thinking blocks,
+    enabling multi-turn conversations that preserve thinking context.
+    """
+    text: str
+    thinking_blocks: List[Dict[str, str]] = None  # [{'type': 'thinking', 'thinking': '...'}]
+    raw_content: List[Dict] = None  # Full content blocks from API
+
+    def __post_init__(self):
+        if self.thinking_blocks is None:
+            self.thinking_blocks = []
+        if self.raw_content is None:
+            self.raw_content = []
+
+    def to_assistant_message(self) -> Dict[str, object]:
+        """Convert to assistant message format for multi-turn passback.
+
+        Claude API requires thinking blocks to be passed back in subsequent
+        messages for conversation continuity with extended thinking.
+        """
+        content = []
+        for block in self.thinking_blocks:
+            content.append({
+                'type': 'thinking',
+                'thinking': block.get('thinking', ''),
+            })
+        if self.text:
+            content.append({
+                'type': 'text',
+                'text': self.text,
+            })
+        return {'role': 'assistant', 'content': content}
+
+
+def anthropic_chat_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float = 0.2,
+    timeout_s: float = 60.0,
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+    system_prompt: str = '',
+) -> Callable[[List[Dict[str, object]]], AnthropicChatResponse]:
+    """Anthropic provider with full messages array support and thinking block passback.
+
+    Unlike `anthropic_invoke_factory` which takes a single prompt string,
+    this factory accepts a messages array for proper multi-turn conversations.
+    It returns an `AnthropicChatResponse` that includes thinking blocks,
+    which must be passed back in subsequent messages per Claude API requirements.
+
+    Usage::
+
+        invoke = anthropic_chat_invoke_factory(
+            api_key='...', model='claude-sonnet-4-20250514',
+            thinking_budget_tokens=10000,
+            system_prompt='You are a coding assistant.',
+        )
+        # First turn
+        response = invoke([{'role': 'user', 'content': 'Solve this...'}])
+        # Second turn — pass back thinking blocks
+        messages = [
+            {'role': 'user', 'content': 'Solve this...'},
+            response.to_assistant_message(),
+            {'role': 'user', 'content': 'Now explain your reasoning.'},
+        ]
+        response2 = invoke(messages)
+    """
+    endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    def _build_max_tokens() -> int:
+        if thinking_budget_tokens > 0:
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096
+
+    def _request_once(messages: List[Dict[str, object]]) -> dict:
+        payload: Dict[str, object] = {
+            'model': model,
+            'max_tokens': _build_max_tokens(),
+            'temperature': temperature,
+            'messages': messages,
+        }
+
+        if stop_sequences:
+            payload['stop_sequences'] = stop_sequences
+
+        # Extended thinking
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            payload['temperature'] = 1.0
+
+        # System prompt with cache_control
+        if system_prompt:
+            payload['system'] = [
+                {
+                    'type': 'text',
+                    'text': system_prompt,
+                    'cache_control': {'type': 'ephemeral'} if enable_prompt_caching else {},
+                }
+            ]
+
+        return _http_post_json(endpoint, payload, headers, timeout_s)
+
+    def invoke(messages: List[Dict[str, object]]) -> AnthropicChatResponse:
+        try:
+            response = _request_with_retry(
+                request_fn=lambda: _request_once(messages),
+                max_retries=2,
+                retry_backoff_s=1.0,
+                retry_http_codes={502, 503, 504, 524},
+            )
+
+            # Track usage
+            if usage_tracker is not None:
+                usage = response.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=model)
+
+            # Parse response content blocks
+            content = response.get('content', [])
+            text_parts: List[str] = []
+            thinking_blocks: List[Dict[str, str]] = []
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get('type')
+                if block_type == 'thinking':
+                    thinking_text = block.get('thinking', '')
+                    if isinstance(thinking_text, str) and thinking_text.strip():
+                        thinking_blocks.append({
+                            'type': 'thinking',
+                            'thinking': thinking_text,
+                        })
+                elif block_type == 'text':
+                    text = block.get('text', '')
+                    if isinstance(text, str) and text.strip():
+                        text_parts.append(text.strip())
+
+            return AnthropicChatResponse(
+                text='\n'.join(text_parts),
+                thinking_blocks=thinking_blocks,
+                raw_content=content,
+            )
+
+        except ProviderHttpError as exc:
+            error_msg = f'Anthropic API error: HTTP {exc.status_code}'
+            if debug and exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            detail = str(exc).strip()
+            message = 'invalid Anthropic response format'
+            if detail:
+                message = f'{message}: {detail}'
+            raise ValueError(message) from exc
+
+    return invoke
+
+
+def anthropic_stream_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float = 0.2,
+    timeout_s: float = 120.0,
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+    system_prompt: str = '',
+) -> Callable[[List[Dict[str, object]]], AnthropicChatResponse]:
+    """Streaming Anthropic provider for real-time responses.
+
+    Uses SSE (Server-Sent Events) to stream responses, providing
+    better UX for long-running requests. Returns the complete
+    AnthropicChatResponse after streaming finishes.
+
+    For extended thinking, streaming shows thinking progress in real-time,
+    which is especially valuable for complex reasoning tasks.
+    """
+    endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    def _build_max_tokens() -> int:
+        if thinking_budget_tokens > 0:
+            return max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+        return 4096
+
+    def _request_once_stream(messages: List[Dict[str, object]]) -> dict:
+        payload: Dict[str, object] = {
+            'model': model,
+            'max_tokens': _build_max_tokens(),
+            'temperature': temperature,
+            'messages': messages,
+            'stream': True,
+        }
+
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {
+                'type': 'enabled',
+                'budget_tokens': thinking_budget_tokens,
+            }
+            payload['temperature'] = 1.0
+
+        if system_prompt:
+            payload['system'] = [
+                {
+                    'type': 'text',
+                    'text': system_prompt,
+                    'cache_control': {'type': 'ephemeral'} if enable_prompt_caching else {},
+                }
+            ]
+
+        body = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                # Parse SSE stream
+                text_parts: List[str] = []
+                thinking_blocks: List[Dict[str, str]] = []
+                current_thinking = ''
+                usage_data: Dict[str, int] = {}
+
+                for line in response:
+                    line_str = line.decode('utf-8', errors='replace').strip()
+                    if not line_str or line_str.startswith(':'):
+                        continue
+                    if line_str.startswith('data: '):
+                        data_str = line_str[6:]
+                        if data_str == '[DONE]':
+                            break
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = event.get('type', '')
+
+                        if event_type == 'content_block_start':
+                            block = event.get('content_block', {})
+                            if block.get('type') == 'thinking':
+                                current_thinking = ''
+                        elif event_type == 'content_block_delta':
+                            delta = event.get('delta', {})
+                            delta_type = delta.get('type', '')
+                            if delta_type == 'thinking_delta':
+                                current_thinking += delta.get('thinking', '')
+                            elif delta_type == 'text_delta':
+                                text_parts.append(delta.get('text', ''))
+                        elif event_type == 'content_block_stop':
+                            if current_thinking:
+                                thinking_blocks.append({
+                                    'type': 'thinking',
+                                    'thinking': current_thinking,
+                                })
+                                current_thinking = ''
+                        elif event_type == 'message_delta':
+                            usage_delta = event.get('usage', {})
+                            for k, v in usage_delta.items():
+                                usage_data[k] = usage_data.get(k, 0) + (v if isinstance(v, int) else 0)
+                        elif event_type == 'message_start':
+                            start_usage = event.get('message', {}).get('usage', {})
+                            for k, v in start_usage.items():
+                                usage_data[k] = usage_data.get(k, 0) + (v if isinstance(v, int) else 0)
+
+                # Track usage
+                if usage_tracker is not None and usage_data:
+                    usage_tracker.record(usage_data, model=model)
+
+                return {
+                    'text': ''.join(text_parts),
+                    'thinking_blocks': thinking_blocks,
+                    'usage': usage_data,
+                }
+
+        except urllib.error.HTTPError as exc:
+            error_body = ''
+            try:
+                error_body = exc.read().decode('utf-8', errors='replace')
+            except Exception:
+                error_body = str(exc)
+            raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+
+    def invoke(messages: List[Dict[str, object]]) -> AnthropicChatResponse:
+        try:
+            result = _request_once_stream(messages)
+            return AnthropicChatResponse(
+                text=result.get('text', ''),
+                thinking_blocks=result.get('thinking_blocks', []),
+                raw_content=[],
+            )
+        except ProviderHttpError as exc:
+            error_msg = f'Anthropic streaming error: HTTP {exc.status_code}'
+            if debug and exc.body:
+                error_msg += f' - {exc.body[:200]}'
+            raise ValueError(error_msg) from exc
+
+    return invoke
+
+
+def anthropic_count_tokens(
+    *,
+    api_key: str,
+    model: str,
+    messages: List[Dict[str, object]],
+    system_prompt: str = '',
+    tools: Optional[List[Dict]] = None,
+    base_url: str = '',
+    timeout_s: float = 30.0,
+) -> Dict[str, int]:
+    """Count tokens for a request without making an actual API call.
+
+    Uses Anthropic's token counting endpoint for precise token counts,
+    which is more accurate than the estimation in token_estimation.py.
+
+    Args:
+        api_key: Anthropic API key
+        model: Model identifier (e.g. 'claude-sonnet-4-20250514')
+        messages: Messages array to count tokens for
+        system_prompt: Optional system prompt
+        tools: Optional tool definitions
+        base_url: Optional custom base URL
+        timeout_s: Request timeout
+
+    Returns:
+        Dict with 'input_tokens' count and optional 'output_tokens' estimate
+    """
+    endpoint = (base_url.rstrip('/') + '/v1/messages?beta=true') if base_url else 'https://api.anthropic.com/v1/messages?beta=true'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    payload: Dict[str, object] = {
+        'model': model,
+        'messages': messages,
+    }
+
+    if system_prompt:
+        payload['system'] = [{'type': 'text', 'text': system_prompt}]
+
+    if tools:
+        payload['tools'] = tools
+
+    try:
+        body = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method='POST')
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return {
+                'input_tokens': int(result.get('input_tokens', 0)),
+            }
+    except urllib.error.HTTPError as exc:
+        error_body = ''
+        try:
+            error_body = exc.read().decode('utf-8', errors='replace')
+        except Exception:
+            error_body = str(exc)
+        # If counting endpoint is not available, fall back to estimation
+        raise ProviderHttpError(status_code=int(exc.code), body=error_body) from exc
+    except Exception as exc:
+        raise ValueError(f'Token counting failed: {exc}') from exc
+
+
+def anthropic_count_tokens_or_estimate(
+    *,
+    api_key: str = '',
+    model: str = 'claude-sonnet-4-20250514',
+    messages: List[Dict[str, object]],
+    system_prompt: str = '',
+    tools: Optional[List[Dict]] = None,
+    base_url: str = '',
+) -> int:
+    """Count tokens with automatic fallback to estimation.
+
+    Tries the Anthropic counting API first; if unavailable (no API key,
+    rate limited, etc.), falls back to the local estimation algorithm.
+    """
+    if api_key:
+        try:
+            result = anthropic_count_tokens(
+                api_key=api_key,
+                model=model,
+                messages=messages,
+                system_prompt=system_prompt,
+                tools=tools,
+                base_url=base_url,
+            )
+            return result['input_tokens']
+        except (ProviderHttpError, ValueError):
+            pass  # Fall through to estimation
+
+    # Fallback: estimate from content length
+    from ..token_estimation import estimate_messages_tokens
+    return estimate_messages_tokens(messages)
 
 
 def gemini_invoke_factory(
@@ -510,6 +1534,7 @@ def openai_compatible_chat_invoke_factory(
     max_retries: int,
     retry_backoff_s: float,
     retry_http_codes: Set[int],
+    usage_tracker: TokenUsageTracker | None = None,
 ) -> ChatInvokeFn:
     """Return a chat invoke function that accepts OpenAI chat messages.
 
@@ -556,6 +1581,11 @@ def openai_compatible_chat_invoke_factory(
             content = message.get('content', '')
             if not isinstance(content, str):
                 return None
+            # Track token usage from OpenAI-compatible response
+            if usage_tracker is not None:
+                usage = data.get('usage', {})
+                if isinstance(usage, dict):
+                    usage_tracker.record(usage, model=current_model)
             return content
 
         return _with_model_fallback(models_to_try, try_model, debug)
@@ -835,3 +1865,98 @@ def get_provider(name: str) -> InvokeFn | None:
     # Other providers require configuration, return None
     # Use build_invoke_from_args for full configuration
     return None
+
+
+# ============== Prompt Cache ==============
+# Based on Zero2Agent article #42: Cost Optimization & Token Management
+# Hash-based cache for identical prompts to avoid redundant API calls.
+
+
+import hashlib
+import threading
+
+
+class PromptCache:
+    """LRU-style cache for LLM prompt responses.
+
+    Caches responses keyed by (model, prompt_hash) to avoid redundant
+    API calls for identical prompts. Useful for repeated system prompts,
+    template rendering, and test/development scenarios.
+
+    Usage::
+
+        cache = PromptCache(max_size=100)
+        key = cache.make_key('claude-3', 'Summarize this: ...')
+        cached = cache.get(key)
+        if cached is None:
+            result = call_llm(prompt)
+            cache.set(key, result)
+        else:
+            result = cached
+    """
+
+    def __init__(self, max_size: int = 128, ttl_seconds: float = 3600.0) -> None:
+        self._max_size = max_size
+        self._ttl_seconds = ttl_seconds
+        self._cache: Dict[str, tuple] = {}  # key -> (result, timestamp)
+        self._access_order: list[str] = []  # LRU tracking
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def make_key(model: str, prompt: str) -> str:
+        """Create a cache key from model name and prompt text."""
+        content = f'{model}:{prompt}'
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+
+    def get(self, key: str) -> str | None:
+        """Get cached result if available and not expired."""
+        with self._lock:
+            if key not in self._cache:
+                return None
+
+            result, timestamp = self._cache[key]
+            # Check TTL
+            import time as _t
+            if _t.time() - timestamp > self._ttl_seconds:
+                del self._cache[key]
+                if key in self._access_order:
+                    self._access_order.remove(key)
+                return None
+
+            # Move to end (most recently used)
+            if key in self._access_order:
+                self._access_order.remove(key)
+            self._access_order.append(key)
+            return result
+
+    def set(self, key: str, result: str) -> None:
+        """Store a result in the cache."""
+        import time as _t
+        with self._lock:
+            # Evict if at capacity
+            while len(self._cache) >= self._max_size and self._access_order:
+                oldest = self._access_order.pop(0)
+                self._cache.pop(oldest, None)
+
+            self._cache[key] = (result, _t.time())
+            if key in self._access_order:
+                self._access_order.remove(key)
+            self._access_order.append(key)
+
+    def clear(self) -> None:
+        """Clear all cached entries."""
+        with self._lock:
+            self._cache.clear()
+            self._access_order.clear()
+
+    @property
+    def size(self) -> int:
+        return len(self._cache)
+
+    def stats(self) -> dict:
+        """Return cache statistics."""
+        return {
+            'size': len(self._cache),
+            'max_size': self._max_size,
+            'ttl_seconds': self._ttl_seconds,
+        }

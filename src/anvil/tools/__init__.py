@@ -163,8 +163,12 @@ def builtin_tool_registrations() -> list[ToolRegistration]:
     """
     registrations: list[ToolRegistration] = []
     registrations.extend(_builtin_core_tool_registrations())
-    registrations.extend(_builtin_git_tool_registrations())
-    registrations.extend(_builtin_github_tool_registrations())
+    # Git/GitHub tools removed from default dispatch — use run_command with
+    # 'git' or 'gh' CLI instead. This reduces tool count from 32 to 12,
+    # matching Zero2Agent's "fewer tools = higher completion rate" principle.
+    # To re-enable: uncomment the lines below.
+    # registrations.extend(_builtin_git_tool_registrations())
+    # registrations.extend(_builtin_github_tool_registrations())
     return registrations
 
 

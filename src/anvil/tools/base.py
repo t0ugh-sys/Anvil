@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Tuple
 
 from ..agent_protocol import ToolResult
 from ..background import BackgroundCommandRunner
@@ -100,3 +101,119 @@ def resolve_inside_workspace(workspace_root: Path, relative_path: str) -> Path:
     if not _is_relative_to(target, root):
         raise ValueError('path escapes workspace root')
     return target
+
+
+# ============== Input Sanitization ==============
+# Based on Zero2Agent article #41: Agent Security & Protection
+# Detects prompt injection patterns in user inputs and tool arguments.
+
+
+# Known prompt injection patterns (case-insensitive)
+_INJECTION_PATTERNS: List[re.Pattern] = [
+    re.compile(r'ignore\s+(all\s+)?previous\s+instructions', re.IGNORECASE),
+    re.compile(r'you\s+are\s+now\s+(a|an)\s+', re.IGNORECASE),
+    re.compile(r'system\s*:\s*', re.IGNORECASE),
+    re.compile(r'forget\s+(all\s+)?(previous|everything|prior)', re.IGNORECASE),
+    re.compile(r'\[INST\].*\[/INST\]', re.IGNORECASE),
+    re.compile(r'<\|im_start\|>system', re.IGNORECASE),
+    re.compile(r'override\s+(all\s+)?safety', re.IGNORECASE),
+    re.compile(r'do\s+not\s+(follow|obey)\s+(any\s+)?(previous|prior|earlier)', re.IGNORECASE),
+    re.compile(r'disregard\s+(all\s+)?(previous|prior|earlier)', re.IGNORECASE),
+    re.compile(r'new\s+instructions?\s*:', re.IGNORECASE),
+    re.compile(r'act\s+as\s+if\s+you\s+(are|were)', re.IGNORECASE),
+]
+
+# Maximum input length to prevent resource exhaustion
+_MAX_INPUT_LENGTH = 100_000  # 100K chars
+
+
+class InjectionDetected(Exception):
+    """Raised when a prompt injection attempt is detected."""
+
+    def __init__(self, pattern: str, input_sample: str):
+        self.pattern = pattern
+        self.input_sample = input_sample[:200]
+        super().__init__(f'Prompt injection detected: matched pattern "{pattern}"')
+
+
+def detect_injection(text: str) -> List[str]:
+    """Check text for prompt injection patterns.
+
+    Returns:
+        List of matched pattern descriptions. Empty list = safe.
+    """
+    if not text:
+        return []
+
+    matches = []
+    for pattern in _INJECTION_PATTERNS:
+        if pattern.search(text):
+            matches.append(pattern.pattern)
+    return matches
+
+
+def sanitize_input(text: str, *, max_length: int = _MAX_INPUT_LENGTH) -> str:
+    """Sanitize user input for safe processing.
+
+    - Truncates excessively long inputs
+    - Strips null bytes
+    - Does NOT modify content otherwise (preserves user intent)
+
+    Use detect_injection() separately if you want to block injection attempts.
+    """
+    if not text:
+        return ''
+
+    # Remove null bytes
+    sanitized = text.replace('\0', '')
+
+    # Truncate if too long
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length]
+
+    return sanitized
+
+
+# ============== PII Output Filtering ==============
+# Based on Zero2Agent article #41: Output Safety Rules
+# Detects common PII patterns in tool output before sending to LLM.
+
+
+# Common PII patterns
+_PII_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    # Email addresses
+    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), '[EMAIL REDACTED]'),
+    # US Social Security Numbers (XXX-XX-XXXX)
+    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[SSN REDACTED]'),
+    # Credit card numbers (16 digits, with optional spaces/dashes)
+    (re.compile(r'\b(?:\d{4}[- ]?){3}\d{4}\b'), '[CARD REDACTED]'),
+    # Chinese ID card numbers (18 digits, last may be X)
+    (re.compile(r'\b\d{17}[\dXx]\b'), '[ID REDACTED]'),
+    # Chinese mobile phone numbers (1XX-XXXX-XXXX)
+    (re.compile(r'\b1[3-9]\d{9}\b'), '[PHONE REDACTED]'),
+    # API keys (common patterns: sk-..., key-..., token-...)
+    (re.compile(r'\b(sk-[A-Za-z0-9]{20,}|[A-Za-z_-]*key-[A-Za-z0-9]{16,}|[A-Za-z_-]*token-[A-Za-z0-9]{16,})\b', re.IGNORECASE), '[API_KEY REDACTED]'),
+    # AWS access key IDs
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})\b'), '[AWS_KEY REDACTED]'),
+    # Private key headers
+    (re.compile(r'-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----'), '[PRIVATE_KEY REDACTED]'),
+]
+
+
+def redact_pii(text: str) -> str:
+    """Redact common PII patterns from text.
+
+    Applies regex-based detection for emails, SSNs, credit cards,
+    Chinese IDs, phone numbers, API keys, AWS keys, and private keys.
+
+    This is a best-effort heuristic — it may miss exotic formats or
+    produce false positives on numeric sequences.
+    """
+    if not text:
+        return text
+
+    redacted = text
+    for pattern, replacement in _PII_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+
+    return redacted
