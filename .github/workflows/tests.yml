@@ -2,7 +2,12 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
@@ -10,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +24,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
-      - name: Install (editable)
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+      - name: Install
+        run: pip install -e .
 
-      - name: Run unit tests
-        run: |
-          python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
