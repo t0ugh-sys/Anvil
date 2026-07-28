@@ -87,6 +87,16 @@ anvil code --goal "search for info" --skill web_search --skill memory
 
 Built-in skills: `web_search`, `memory`, `files`, `commands`, `browser` (requires `playwright`)
 
+Skills live in `skills/` at the repo root. Each skill follows the layout:
+
+```
+skills/<name>/SKILL.md    # skill manifest and instructions
+```
+
+### Built-in tools
+
+Key tools available to the agent: `todo_write`, `todo_reminder`, `run_command`, `read_file`, `write_file`, `search_files`.
+
 ## Provider Configuration
 
 ### Anthropic
