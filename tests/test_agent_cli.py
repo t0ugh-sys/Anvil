@@ -28,7 +28,7 @@ from anvil.services.event_viewer import render_event_row
 from anvil.services.catalog_service import render_skills, render_tools
 from anvil.services.replay_service import render_replay, resolve_events_file
 from anvil.services.coding_runtime import build_coding_prompt
-from anvil.agent_protocol import ToolResult
+from anvil.agent.protocol import ToolResult
 from anvil.services.session_runtime import (
     _extract_interactive_output,
     _format_chat_history,
@@ -37,8 +37,8 @@ from anvil.services.session_runtime import (
     build_interactive_turn_runner,
 )
 from anvil.services.team_service import parse_team_message, parse_teammate
-from anvil.session import SessionStore
-from anvil.skills import SkillLoader
+from anvil.runtime.session import SessionStore
+from anvil.infra.skills import SkillLoader
 from anvil.tools import builtin_tool_specs
 
 

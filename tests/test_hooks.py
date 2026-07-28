@@ -7,7 +7,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from anvil.hooks import (
+from anvil.infra.hooks import (
     HookConfig,
     HookEvent,
     HookInput,

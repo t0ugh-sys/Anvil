@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from anvil.retry import (
+from anvil.infra.retry import (
     DEFAULT_BASE_BACKOFF_S,
     DEFAULT_MAX_BACKOFF_S,
     NonRetryableError,

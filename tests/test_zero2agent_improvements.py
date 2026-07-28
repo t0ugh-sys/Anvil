@@ -10,8 +10,8 @@ from anvil.compression import (
     micro_compact_entries,
     time_based_micro_compact,
 )
-from anvil.subagents import TaskNotification
-from anvil.team_runtime import TeamMessageType
+from anvil.agent.subagents import TaskNotification
+from anvil.runtime.team import TeamMessageType
 
 
 # ============== Time-based Microcompact ==============
@@ -121,7 +121,7 @@ class TestTaskNotification:
         assert len(xml) < 5000  # result truncated to 2000
 
     def test_build_notification_from_result(self):
-        from anvil.subagents import SubAgentResult
+        from anvil.agent.subagents import SubAgentResult
         r = SubAgentResult(
             agent_id='coder', task_id='t4', success=True,
             stop_reason='completed', final_output='All tests pass',
@@ -145,7 +145,7 @@ class TestPlanApprovalProtocol:
         assert TeamMessageType.plan_approval_response.value == 'plan_approval_response'
 
     def test_reject_requires_feedback(self):
-        from anvil.team_runtime import PersistentTeamRuntime
+        from anvil.runtime.team import PersistentTeamRuntime
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             from pathlib import Path
@@ -157,7 +157,7 @@ class TestPlanApprovalProtocol:
                 assert 'feedback is required' in str(e)
 
     def test_approve_plan_sends_message(self):
-        from anvil.team_runtime import PersistentTeamRuntime
+        from anvil.runtime.team import PersistentTeamRuntime
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             from pathlib import Path

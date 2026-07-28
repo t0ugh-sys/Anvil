@@ -11,11 +11,11 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from anvil.core.types import StepContext
-from anvil.skills import SkillLoader
+from anvil.infra.skills import SkillLoader
 from anvil.compression import CompactConfig, TranscriptEntry
-from anvil.task_graph import Task, TaskGraph
-from anvil.task_store import TaskStore
-from anvil.tool_use_loop import ToolUseState, make_tool_use_step
+from anvil.runtime.task_graph import Task, TaskGraph
+from anvil.runtime.task_store import TaskStore
+from anvil.agent.loop import ToolUseState, make_tool_use_step
 from anvil.todo import TodoItem
 
 

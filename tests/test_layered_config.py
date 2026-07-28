@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from anvil.layered_config import (
+from anvil.config.layered import (
     BUILTIN_DEFAULTS,
     LayeredConfig,
     build_layered_config,

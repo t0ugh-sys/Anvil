@@ -7,7 +7,7 @@ import _bootstrap  # noqa: F401 — adds src/ to sys.path
 
 from anvil.tools.base import redact_pii
 from anvil.llm.providers import PromptCache
-from anvil.hooks import SecurityMonitor, SecurityEvent
+from anvil.infra.hooks import SecurityMonitor, SecurityEvent
 
 
 # ============== PII Redaction ==============

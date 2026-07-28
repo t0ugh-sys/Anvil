@@ -7,10 +7,10 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from anvil.context_schema import OrchestrationContextInput, build_orchestration_context
-from anvil.mailbox import JsonlMailbox, MailMessage
-from anvil.policies import ToolPolicy
-from anvil.task_graph import Task, TaskGraph
+from anvil.config.context_schema import OrchestrationContextInput, build_orchestration_context
+from anvil.runtime.mailbox import JsonlMailbox, MailMessage
+from anvil.infra.policies import ToolPolicy
+from anvil.runtime.task_graph import Task, TaskGraph
 
 
 class ContextSchemaTests(unittest.TestCase):

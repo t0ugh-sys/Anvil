@@ -7,7 +7,7 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from anvil.skills import SkillLoader, discover_local_skill_names, skill_metadata
+from anvil.infra.skills import SkillLoader, discover_local_skill_names, skill_metadata
 
 
 class SkillsTests(unittest.TestCase):

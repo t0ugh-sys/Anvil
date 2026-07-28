@@ -39,10 +39,10 @@ Repository = "https://github.com/t0ugh-sys/Anvil"
 Issues = "https://github.com/t0ugh-sys/Anvil/issues"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+package-dir = { "" = "." }
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 
 [tool.setuptools.package-data]
 anvil = ["py.typed"]
