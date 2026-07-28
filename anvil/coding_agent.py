@@ -6,12 +6,12 @@ from typing import Optional
 from .compression import CompactConfig
 from .core.agent import AnvilAgent
 from .core.types import ContextProviderFn, ObserverFn, RunResult, StopConfig
-from .policies import ToolPolicy
-from .task_store import TaskStore
-from .tool_use_loop import DeciderFn, SummarizerFn, ToolUseState, make_tool_use_step
+from .infra.policies import ToolPolicy
+from .runtime.task_store import TaskStore
+from .agent.loop import DeciderFn, SummarizerFn, ToolUseState, make_tool_use_step
 
 try:
-    from .skills import SkillLoader
+    from .infra.skills import SkillLoader
 except ImportError:  # pragma: no cover
     SkillLoader = None  # type: ignore[assignment]
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from anvil.session import SessionStore, SessionState
+from anvil.runtime.session import SessionStore, SessionState
 
 
 class DirtyTrackingTests(unittest.TestCase):

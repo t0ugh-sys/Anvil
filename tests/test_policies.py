@@ -7,8 +7,8 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from anvil.agent_protocol import ToolCall
-from anvil.policies import Capability, ToolPolicy, policy_from_name
+from anvil.agent.protocol import ToolCall
+from anvil.infra.policies import Capability, ToolPolicy, policy_from_name
 from anvil.tools import ToolContext, build_default_tools, execute_tool_call
 
 

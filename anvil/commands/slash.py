@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from ..session import SessionStore
+from ..runtime.session import SessionStore
 from ..services.session_renderer import (
     parse_limit as _parse_limit,
     render_event_summary,

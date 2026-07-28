@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ..run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
+from ..config.run_schema import EventRow, SCHEMA_VERSION, utc_now_iso
 from .base import MemoryContext
 
 

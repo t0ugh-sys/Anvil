@@ -5,7 +5,7 @@ import time
 
 import _bootstrap  # noqa: F401
 
-from anvil.background import BackgroundCommandRunner, BackgroundTaskInfo
+from anvil.agent.background import BackgroundCommandRunner, BackgroundTaskInfo
 
 
 class TestBackgroundTaskInfo:

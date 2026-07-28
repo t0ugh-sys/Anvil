@@ -7,14 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Tuple
 
-from ..agent_protocol import ToolResult
-from ..background import BackgroundCommandRunner
+from ..agent.protocol import ToolResult
+from ..agent.background import BackgroundCommandRunner
 from ..compression import CompactManager
-from ..policies import ToolPolicy
+from ..infra.policies import ToolPolicy
 from ..tool_spec import ToolDef, ToolRisk, ToolSpec, ValidationResult
 
 if TYPE_CHECKING:
-    from ..skills import SkillLoader
+    from ..infra.skills import SkillLoader
     from ..todo import TodoManager
 
 __all__ = [

@@ -10,8 +10,8 @@ from ..coding_agent import run_coding_agent
 from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
 from ..runtime import CodeRuntime
-from ..session import SessionStore
-from ..tool_use_loop import _looks_like_file_action
+from ..runtime.session import SessionStore
+from ..agent.loop import _looks_like_file_action
 from ..tools import builtin_tool_specs
 from .chat_runtime import InteractiveRuntime
 from .coding_runtime import build_coding_decider, build_coding_summarizer, load_skills_from_args

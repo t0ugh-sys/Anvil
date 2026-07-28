@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from ..agent_protocol import ToolResult
+from ..agent.protocol import ToolResult
 
 
 # Skill definition

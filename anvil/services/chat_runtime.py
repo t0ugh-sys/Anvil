@@ -10,7 +10,7 @@ from typing import Callable, Iterable, TextIO, TypeVar
 
 from ..commands.slash import execute_slash_command, parse_slash_command
 from ..messages import AssistantMessage, UserMessage
-from ..session import SessionStore
+from ..runtime.session import SessionStore
 from ..tool_spec import ToolSpec
 from ..ui.chrome import (
     ACCENT,

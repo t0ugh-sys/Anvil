@@ -7,8 +7,8 @@ from typing import Any, Callable
 from typing import Any, Callable
 
 from ..core.types import StopConfig
-from ..task_graph import Task
-from ..team_runtime import PersistentTeamRuntime, PersistentTeammateSpec
+from ..runtime.task_graph import Task
+from ..runtime.team import PersistentTeamRuntime, PersistentTeammateSpec
 
 __all__ = [
     'parse_teammate',

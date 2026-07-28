@@ -11,7 +11,7 @@ from .core.agent import AnvilAgent
 from .core.serialization import run_result_to_dict
 from .core.types import ContextSnapshot, ObserverFn, RunResult, StopConfig, StopReason
 from .memory.jsonl_store import JsonlMemoryStore
-from .run_recorder import RunRecorder
+from .runtime.run_recorder import RunRecorder
 from .steps.registry import StepRegistry, build_default_registry
 from .utils import build_jsonl_observer, default_run_id, merge_observers, resolve_goal
 

@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from ..agent_protocol import ToolResult
+from ..agent.protocol import ToolResult
 from ..tools import ToolContext
 
 __all__ = [

@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from typing import Callable, Dict, Set
 
-from ..retry import NonRetryableError, RetryExhausted, with_retry
+from ..infra.retry import NonRetryableError, RetryExhausted, with_retry
 from ._types import DEFAULT_RETRY_HTTP_CODES
 
 

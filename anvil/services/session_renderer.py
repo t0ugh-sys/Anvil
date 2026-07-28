@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..messages import render_transcript
-from ..session import SessionStore
+from ..runtime.session import SessionStore
 from .event_viewer import render_event_stream
 
 __all__ = ['render_session', 'render_session_diff', 'parse_limit']

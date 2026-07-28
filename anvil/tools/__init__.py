@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ..agent_protocol import ToolResult
-from ..permissions import PermissionMode
-from ..policies import TOOL_CAPABILITIES
+from ..agent.protocol import ToolResult
+from ..infra.permissions import PermissionMode
+from ..infra.policies import TOOL_CAPABILITIES
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import (
     ToolContext,

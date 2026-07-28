@@ -34,7 +34,7 @@ Key rule: the loop stays stable; the runtime layers around it can evolve indepen
 - Terminal-first interactive runtime by default
 - Claude Code-style internal layering: `entrypoints/`, `services/`, `commands/`
 - Tool-use feedback loop as the primary execution model
-- Stdlib-only core in `src/anvil/`
+- Stdlib-only core in `anvil/core/`
 - Iterative agent loop with max-step, timeout, and cancellation stop conditions
 - Structured run artifacts in `.anvil/runs/<run_id>/`
 - Configurable model providers for mock, OpenAI-compatible, Anthropic, and Gemini flows

@@ -5,7 +5,7 @@ import time
 
 import _bootstrap  # noqa: F401 — adds src/ to sys.path
 
-from anvil.retry import (
+from anvil.infra.retry import (
     CircuitBreaker,
     CircuitBreakerOpen,
     CircuitState,

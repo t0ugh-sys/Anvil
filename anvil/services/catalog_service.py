@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..skills import get_skill, list_skills
+from ..infra.skills import get_skill, list_skills
 from ..tools import build_default_tools, builtin_tool_specs
 
 __all__ = ['render_tools', 'render_skills']

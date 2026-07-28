@@ -10,7 +10,7 @@ from pathlib import Path
 import _bootstrap  # noqa: F401
 
 from anvil.services.chat_runtime import InteractiveRuntime
-from anvil.session import SessionStore
+from anvil.runtime.session import SessionStore
 from anvil.tools import builtin_tool_specs
 from anvil.ui.chrome import ASSISTANT, BORDER, PROMPT, PROMPT_MARKER, RESPONSE_MARKER, TOP_LEFT
 

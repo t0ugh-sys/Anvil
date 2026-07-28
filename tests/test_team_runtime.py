@@ -8,12 +8,12 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 
-from anvil.team_runtime import (
+from anvil.runtime.team import (
     PersistentTeamRuntime,
     PersistentTeammateSpec,
     TeamMessageType,
 )
-from anvil.task_graph import Task, TaskStatus
+from anvil.runtime.task_graph import Task, TaskStatus
 
 
 def _build_mock_decider(prefix: str):

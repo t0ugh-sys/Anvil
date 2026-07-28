@@ -4,13 +4,13 @@ import argparse
 import json
 from typing import Any, Dict, Tuple
 
-from ..agent_protocol import render_agent_step_schema
+from ..agent.protocol import render_agent_step_schema
 from ..coding_agent import run_coding_agent
 from ..compression import summarize_entries_deterministically
 from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
 from ..runtime import CodeRuntime
-from ..skills import SkillLoader, list_skills
+from ..infra.skills import SkillLoader, list_skills
 from ..utils import resolve_goal
 
 

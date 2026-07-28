@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from anvil.agent_protocol import ToolCall
+from anvil.agent.protocol import ToolCall
 from anvil.tools import (
     ToolContext,
     build_default_tools,
@@ -22,7 +22,7 @@ from anvil.tools import (
     run_command_tool,
     write_file_tool,
 )
-from anvil.skills import SkillLoader
+from anvil.infra.skills import SkillLoader
 
 
 class ToolsTests(unittest.TestCase):

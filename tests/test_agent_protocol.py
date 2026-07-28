@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from anvil.agent_protocol import parse_agent_step
+from anvil.agent.protocol import parse_agent_step
 
 
 class AgentProtocolTests(unittest.TestCase):

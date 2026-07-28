@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
-from ..agent_protocol import ToolResult
-from ..policies import Capability
+from ..agent.protocol import ToolResult
+from ..infra.policies import Capability
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import ToolContext, resolve_inside_workspace
 

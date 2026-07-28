@@ -5,8 +5,8 @@ import re
 import subprocess
 from typing import Dict, List
 
-from ..agent_protocol import ToolResult
-from ..policies import Capability
+from ..agent.protocol import ToolResult
+from ..infra.policies import Capability
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import ToolContext, iter_searchable_files
 
