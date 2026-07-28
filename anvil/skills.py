@@ -68,7 +68,7 @@ def register_skill(skill_class: type[Skill]) -> None:
 
 
 def _skills_docs_root() -> Path:
-    return Path(__file__).resolve().parents[2] / 'skills'
+    return Path(__file__).resolve().parents[1] / 'skills'
 
 
 def _skill_doc_path_for_root(root: Path, name: str) -> Path:
