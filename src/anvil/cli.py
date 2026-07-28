@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -122,11 +123,55 @@ def execute(args: argparse.Namespace, registry: StepRegistry) -> Tuple[str, int]
     return rendered, exit_code
 
 
+def _handle_update_pricing(argv: list[str]) -> None:
+    from .llm.usage import PRICING_FILE, _CLAUDE_PRICING, _load_pricing_from_file
+
+    parser = argparse.ArgumentParser(prog='anvil update-pricing')
+    parser.add_argument('--show', action='store_true', help='Print current pricing table')
+    parser.add_argument('--model', help='Model key to add or update (e.g. claude-sonnet-5)')
+    parser.add_argument('--input', type=float, dest='input_price', metavar='N',
+                        help='Input price per million tokens (USD)')
+    parser.add_argument('--output', type=float, dest='output_price', metavar='N',
+                        help='Output price per million tokens (USD)')
+    parser.add_argument('--cache-write', type=float, metavar='N',
+                        help='Cache-write price per million tokens (USD)')
+    parser.add_argument('--cache-read', type=float, metavar='N',
+                        help='Cache-read price per million tokens (USD)')
+    args = parser.parse_args(argv)
+
+    data = _load_pricing_from_file()
+    if data is None:
+        data = dict(_CLAUDE_PRICING)
+        file_data: dict = {'updated_at': '', 'models': data}
+    else:
+        file_data = json.loads(PRICING_FILE.read_text(encoding='utf-8'))
+
+    if args.model:
+        if None in (args.input_price, args.output_price, args.cache_write, args.cache_read):
+            parser.error('--input, --output, --cache-write, and --cache-read are all required with --model')
+        file_data['models'][args.model] = {
+            'input': args.input_price,
+            'output': args.output_price,
+            'cache_write': args.cache_write,
+            'cache_read': args.cache_read,
+        }
+        file_data['updated_at'] = datetime.now(tz=timezone.utc).strftime('%Y-%m-%d')
+        PRICING_FILE.write_text(json.dumps(file_data, indent=2), encoding='utf-8')
+        print(f"Updated pricing for {args.model!r} in {PRICING_FILE}")
+
+    if args.show or not args.model:
+        print(json.dumps(file_data, indent=2, ensure_ascii=False))
+
+
 def main() -> None:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')  # type: ignore[call-arg]
+
+    if len(sys.argv) > 1 and sys.argv[1] == 'update-pricing':
+        _handle_update_pricing(sys.argv[2:])
+        return
 
     registry = build_default_registry()
     args = build_parser(registry).parse_args()
