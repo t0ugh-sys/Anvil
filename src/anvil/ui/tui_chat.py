@@ -220,7 +220,7 @@ def run(argv: Optional[list[str]] = None) -> int:
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
     from textual.screen import ModalScreen
-    from textual.widgets import Footer, Header, Input, Static, OptionList
+    from textual.widgets import Footer, Header, Input, RichLog, OptionList
 
     args = build_parser().parse_args(argv)
 
@@ -334,7 +334,6 @@ def run(argv: Optional[list[str]] = None) -> int:
         }
         #log {
             height: 1fr;
-            overflow-y: auto;
             border: heavy $accent;
             padding: 1 2;
             background: $surface;
@@ -424,7 +423,7 @@ def run(argv: Optional[list[str]] = None) -> int:
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
             with Vertical():
-                yield Static('', id='log')
+                yield RichLog(id='log', markup=True, highlight=True, auto_scroll=True)
                 yield Input(placeholder='Say something... (/exit to quit)', id='input')
             yield Footer()
 
@@ -446,17 +445,15 @@ def run(argv: Optional[list[str]] = None) -> int:
             try:
                 new_cfg, new_invoke, banner = _apply_provider_change(value)
             except Exception as e:
-                log = self.query_one('#log', Static)
-                existing = (getattr(log, 'renderable', None) or '')
-                log.update(existing + f'ERROR: {e}\n')
+                log = self.query_one('#log', RichLog)
+                log.write(f'[bold red]ERROR: {e}[/bold red]')
                 return
 
             current_cfg = new_cfg
             current_invoke = new_invoke
 
-            log = self.query_one('#log', Static)
-            existing = (getattr(log, 'renderable', None) or '')
-            log.update(existing + f'\n[{banner}]\n')
+            log = self.query_one('#log', RichLog)
+            log.write(f'[dim][{banner}][/dim]')
 
         def _on_model_picked(self, value: Optional[str]) -> None:
             if not value:
@@ -468,26 +465,25 @@ def run(argv: Optional[list[str]] = None) -> int:
                 new_cfg, banner = _apply_model_change(current_cfg, value)
                 new_invoke = _build_chat_invoke(new_cfg)
             except Exception as e:
-                log = self.query_one('#log', Static)
-                existing = (getattr(log, 'renderable', None) or '')
-                log.update(existing + f'ERROR: {e}\n')
+                log = self.query_one('#log', RichLog)
+                log.write(f'[bold red]ERROR: {e}[/bold red]')
                 return
 
             current_cfg = new_cfg
             current_invoke = new_invoke
 
-            log = self.query_one('#log', Static)
-            existing = (getattr(log, 'renderable', None) or '')
-            log.update(existing + f'\n[{banner}]\n')
+            log = self.query_one('#log', RichLog)
+            log.write(f'[dim][{banner}][/dim]')
 
         def on_ready(self) -> None:
             self.query_one('#input', Input).focus()
 
         def on_mount(self) -> None:
-            log = self.query_one('#log', Static)
-            log.update(_welcome_text(chat_id, chat_dir, current_cfg))
+            log = self.query_one('#log', RichLog)
+            log.write(_welcome_text(chat_id, chat_dir, current_cfg))
 
         async def on_input_submitted(self, event: Input.Submitted) -> None:
+            import asyncio
             nonlocal current_cfg, current_invoke
 
             text = event.value.strip()
@@ -503,21 +499,17 @@ def run(argv: Optional[list[str]] = None) -> int:
                     backup = messages_path.with_suffix('.bak')
                     backup.write_text(messages_path.read_text(encoding='utf-8'), encoding='utf-8')
                     messages_path.unlink()
-                log = self.query_one('#log', Static)
-                log.update(
-                    _welcome_text(
-                        chat_id,
-                        chat_dir,
-                        current_cfg,
-                        reset_note='(reset: messages.jsonl cleared; backup: messages.bak)',
-                    )
-                )
+                log = self.query_one('#log', RichLog)
+                log.clear()
+                log.write(_welcome_text(
+                    chat_id, chat_dir, current_cfg,
+                    reset_note='(reset: messages.jsonl cleared; backup: messages.bak)',
+                ))
                 return
 
             if text == '/status':
-                log = self.query_one('#log', Static)
-                existing = (getattr(log, 'renderable', None) or '')
-                log.update(existing + f'\n[{_cfg_banner(current_cfg)}]\n')
+                log = self.query_one('#log', RichLog)
+                log.write(f'[dim][{_cfg_banner(current_cfg)}][/dim]')
                 return
 
             if text == '/model':
@@ -530,17 +522,15 @@ def run(argv: Optional[list[str]] = None) -> int:
                     new_cfg, banner = _apply_model_change(current_cfg, model_name)
                     new_invoke = _build_chat_invoke(new_cfg)
                 except Exception as e:
-                    log = self.query_one('#log', Static)
-                    existing = (getattr(log, 'renderable', None) or '')
-                    log.update(existing + f'ERROR: {e}\n')
+                    log = self.query_one('#log', RichLog)
+                    log.write(f'[bold red]ERROR: {e}[/bold red]')
                     return
 
                 current_cfg = new_cfg
                 current_invoke = new_invoke
 
-                log = self.query_one('#log', Static)
-                existing = (getattr(log, 'renderable', None) or '')
-                log.update(existing + f'\n[{banner}]\n')
+                log = self.query_one('#log', RichLog)
+                log.write(f'[dim][{banner}][/dim]')
                 return
 
             if text.startswith('/provider'):
@@ -552,28 +542,26 @@ def run(argv: Optional[list[str]] = None) -> int:
                 try:
                     new_cfg, new_invoke, banner = _apply_provider_change(parts[1])
                 except Exception as e:
-                    log = self.query_one('#log', Static)
-                    existing = (getattr(log, 'renderable', None) or '')
-                    log.update(existing + f'ERROR: {e}\n')
+                    log = self.query_one('#log', RichLog)
+                    log.write(f'[bold red]ERROR: {e}[/bold red]')
                     return
 
                 current_cfg = new_cfg
                 current_invoke = new_invoke
 
-                log = self.query_one('#log', Static)
-                existing = (getattr(log, 'renderable', None) or '')
-                log.update(existing + f'\n[{banner}]\n')
+                log = self.query_one('#log', RichLog)
+                log.write(f'[dim][{banner}][/dim]')
                 return
 
-            log = self.query_one('#log', Static)
-            existing = (getattr(log, 'renderable', None) or '')
-            log.update(existing + f'\n> {text}\n')
+            log = self.query_one('#log', RichLog)
+            log.write(f'[bold green]> {text}[/bold green]')
 
             _append_jsonl(messages_path, {'role': 'user', 'text': text, 'ts': datetime.now(timezone.utc).isoformat()})
 
+            log.write('[dim]⏳ Working...[/dim]')
             try:
                 messages = load_messages(current_cfg.history_limit)
-                reply = current_invoke(messages)
+                reply = await asyncio.to_thread(current_invoke, messages)
             except Exception as e:
                 reply = f'ERROR: {e}'
 
@@ -581,9 +569,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                 messages_path,
                 {'role': 'assistant', 'text': reply, 'ts': datetime.now(timezone.utc).isoformat()},
             )
-            log = self.query_one('#log', Static)
-            existing = (getattr(log, 'renderable', None) or '')
-            log.update(existing + reply + '\n')
+            log.write(reply + '\n')
 
     ChatApp().run()
     return 0

@@ -136,12 +136,15 @@ def _model_candidates(provider: str) -> list[str]:
         ]
     if provider == 'anthropic':
         return [
-            'claude-sonnet-4-6', 'claude-haiku-4-5-20251001',
-            'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest',
-            'mimo-v2.5-pro', 'mimo-v2-pro',
+            'claude-opus-5',
+            'claude-sonnet-5',
+            'claude-sonnet-4-5',
+            'claude-haiku-4-5-20251001',
+            'claude-3-5-sonnet-latest',
+            'claude-3-5-haiku-latest',
         ]
     if provider == 'gemini':
-        return ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']
+        return ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
     return []
 
 
@@ -351,15 +354,18 @@ def _print_help(console: Console, cfg: ChatConfig) -> None:
 def _print_response(console: Console, text: str, cfg: ChatConfig) -> None:
     width = _ui_width(console)
     console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
-    for line in response_lines(text, width=width):
-        if line.lstrip().startswith(RESPONSE_MARKER):
-            prefix, _, rest = line.partition(RESPONSE_MARKER)
-            rendered = Text(prefix)
-            rendered.append(RESPONSE_MARKER, style='anvil.response')
-            rendered.append(rest, style='anvil.output')
-            console.print(rendered)
-        else:
-            console.print(line, style='anvil.output', markup=False)
+    if HAS_RICH:
+        _safe_print_markdown(console, text)
+    else:
+        for line in response_lines(text, width=width):
+            if line.lstrip().startswith(RESPONSE_MARKER):
+                prefix, _, rest = line.partition(RESPONSE_MARKER)
+                rendered = Text(prefix)
+                rendered.append(RESPONSE_MARKER, style='anvil.response')
+                rendered.append(rest, style='anvil.output')
+                console.print(rendered)
+            else:
+                console.print(line, style='anvil.output', markup=False)
     console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
     sb = status_bar(cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()), width=width)
     console.print(sb, style='anvil.status', markup=False)

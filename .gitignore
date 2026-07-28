@@ -10,10 +10,8 @@ build/
 dist/
 *.egg-info/
 .venv/
-goal.txt
 runs/
 AGENTS.md
-.loopagent/
 
 # Environment files
 .env
@@ -22,3 +20,4 @@ AGENTS.md
 .npm-cache/
 .codex-pr-body.md
 tests/.tmp/
+OPTIMIZATION_PLAN.md

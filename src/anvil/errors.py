@@ -12,7 +12,23 @@ from typing import Any
 
 # ============== Error Hierarchy ==============
 
-__all__ = ['AnvilError', 'ValidationError', 'AbortError', 'ShellError', 'ToolValidationError', 'is_abort_error', 'format_tool_error', 'format_error', 'validate_goal', 'validate_model', 'validate_temperature', 'validate_max_steps', 'validate_provider', 'validate_strategy']
+__all__ = [
+    'AnvilError', 'ValidationError', 'AbortError', 'ShellError',
+    'ToolValidationError', 'is_abort_error', 'format_tool_error',
+    'format_error', 'validate_goal', 'validate_model',
+    'validate_temperature', 'validate_max_steps', 'validate_provider',
+    'validate_strategy',
+    # Provider errors
+    'ProviderError', 'RateLimitError', 'AuthError', 'ModelNotFoundError',
+    'ProviderTimeoutError', 'ProviderResponseError',
+    # Tool errors
+    'ToolError', 'ToolTimeoutError', 'ToolPermissionDeniedError',
+    'ToolNotFoundError', 'ToolExecutionError',
+    # Session / loop errors
+    'SessionError', 'CompactionError',
+    # Config errors
+    'ConfigError', 'ConfigValidationError',
+]
 
 _VALID_PROVIDERS = frozenset({"mock", "openai_compatible", "anthropic", "gemini"})
 
@@ -219,3 +235,157 @@ def validate_strategy(strategy: str) -> str:
         raise ValidationError("Strategy cannot be empty", {"field": "strategy"})
 
     return strategy.strip()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Provider errors
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ProviderError(AnvilError):
+    """Raised when an LLM provider returns an error or is unreachable."""
+    code = "PROVIDER_ERROR"
+
+    def __init__(self, message: str = '', details: dict | None = None) -> None:
+        super().__init__(message, details)
+
+
+class RateLimitError(ProviderError):
+    """HTTP 429 — provider rate limit hit.
+
+    retry_after: seconds to wait, parsed from the ``retry-after`` header.
+    """
+    code = "RATE_LIMIT_ERROR"
+
+    def __init__(self, message: str = '', *, retry_after: float | None = None, details: dict | None = None) -> None:
+        super().__init__(message, details)
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:
+        base = self.message or 'Rate limit exceeded'
+        if self.retry_after is not None:
+            return f'{base} (retry after {self.retry_after:.1f}s)'
+        return base
+
+
+class AuthError(ProviderError):
+    """HTTP 401/403 — invalid or missing API key."""
+    code = "AUTH_ERROR"
+
+
+class ModelNotFoundError(ProviderError):
+    """HTTP 404 on model — model ID is unknown or not accessible."""
+    code = "MODEL_NOT_FOUND"
+
+    def __init__(self, model: str = '', details: dict | None = None) -> None:
+        msg = f'Model not found: {model!r}' if model else 'Model not found'
+        super().__init__(msg, details)
+        self.model = model
+
+
+class ProviderTimeoutError(ProviderError):
+    """Request to the LLM provider timed out."""
+    code = "PROVIDER_TIMEOUT"
+
+
+class ProviderResponseError(ProviderError):
+    """Provider returned an unexpected response structure."""
+    code = "PROVIDER_RESPONSE_ERROR"
+
+    def __init__(self, message: str = '', *, status_code: int | None = None, details: dict | None = None) -> None:
+        super().__init__(message, details)
+        self.status_code = status_code
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tool errors
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ToolError(AnvilError):
+    """Base class for tool execution errors."""
+    code = "TOOL_ERROR"
+
+    def __init__(self, message: str = '', *, tool_name: str = '', details: dict | None = None) -> None:
+        super().__init__(message, details)
+        self.tool_name = tool_name
+
+    def __str__(self) -> str:
+        base = self.message
+        if self.tool_name:
+            return f'[{self.tool_name}] {base}'
+        return base
+
+
+class ToolTimeoutError(ToolError):
+    """Tool call exceeded its time limit."""
+    code = "TOOL_TIMEOUT"
+
+    def __init__(self, tool_name: str = '', *, timeout_s: float | None = None, details: dict | None = None) -> None:
+        msg = f'timed out after {timeout_s:.1f}s' if timeout_s is not None else 'timed out'
+        super().__init__(msg, tool_name=tool_name, details=details)
+        self.timeout_s = timeout_s
+
+
+class ToolPermissionDeniedError(ToolError):
+    """Tool call was denied by the permission manager."""
+    code = "TOOL_PERMISSION_DENIED"
+
+
+class ToolNotFoundError(ToolError):
+    """The requested tool name is not registered."""
+    code = "TOOL_NOT_FOUND"
+
+    def __init__(self, tool_name: str = '', details: dict | None = None) -> None:
+        super().__init__(f'Unknown tool: {tool_name!r}', tool_name=tool_name, details=details)
+
+
+class ToolExecutionError(ToolError):
+    """Tool ran but returned a non-zero exit or raised an internal exception."""
+    code = "TOOL_EXECUTION_ERROR"
+
+    def __init__(self, message: str = '', *, tool_name: str = '', exit_code: int | None = None, details: dict | None = None) -> None:
+        super().__init__(message, tool_name=tool_name, details=details)
+        self.exit_code = exit_code
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Session / loop errors
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SessionError(AnvilError):
+    """Session lifecycle problems (load, save, corrupt state)."""
+    code = "SESSION_ERROR"
+
+    def __init__(self, message: str = '', details: dict | None = None) -> None:
+        super().__init__(message, details)
+
+
+class CompactionError(AnvilError):
+    """Context compaction failed or produced an unusable result."""
+    code = "COMPACTION_ERROR"
+
+    def __init__(self, message: str = '', details: dict | None = None) -> None:
+        super().__init__(message, details)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Config errors
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ConfigError(AnvilError):
+    """Base class for configuration-related errors."""
+    code = "CONFIG_ERROR"
+
+    def __init__(self, message: str = '', details: dict | None = None) -> None:
+        super().__init__(message, details)
+
+
+class ConfigValidationError(ConfigError):
+    """One or more config fields failed validation at startup.
+
+    errors: list of human-readable strings, one per failing field.
+    """
+    code = "CONFIG_VALIDATION_ERROR"
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = list(errors)
+        super().__init__(f'Config validation failed: {"; ".join(errors)}')
