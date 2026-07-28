@@ -3,16 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .compression import CompactConfig
-from .core.serialization import run_result_to_dict
-from .core.types import ContextSnapshot, ObserverFn, StopConfig
-from .memory.jsonl_store import JsonlMemoryStore
-from .permissions import PermissionManager, PermissionRule, PermissionRuleSet
-from .policies import Capability, ToolPolicy
-from .run_recorder import RunRecorder
-from .session import SessionStore
-from .task_store import TaskStore
-from .utils import build_jsonl_observer, default_run_id, merge_observers
+from anvil.compression import CompactConfig
+from anvil.core.serialization import run_result_to_dict
+from anvil.core.types import ContextSnapshot, ObserverFn, StopConfig
+from anvil.memory.jsonl_store import JsonlMemoryStore
+from anvil.infra.permissions import PermissionManager, PermissionRule, PermissionRuleSet
+from anvil.infra.policies import Capability, ToolPolicy
+from anvil.runtime.run_recorder import RunRecorder
+from anvil.runtime.session import SessionStore
+from anvil.runtime.task_store import TaskStore
+from anvil.utils import build_jsonl_observer, default_run_id, merge_observers
 
 
 __all__ = ['CodeRuntime']

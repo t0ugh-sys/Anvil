@@ -29,6 +29,9 @@ __all__ = [
     'load_yaml_config',
     'load_json_config',
     'merge_config',
+    'load_env_config',
+    'DEFAULT_CONFIG_LOCATIONS',
+    'find_default_config',
 ]
 
 PathLike = Union[str, Path]
