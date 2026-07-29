@@ -74,9 +74,7 @@ def should_launch_interactive(argv: List[str]) -> bool:
     if not argv:
         return True
     first = argv[0]
-    if first in {'-h', '--help'}:
-        return False
-    return first not in {'code', 'tools', 'skills', 'replay', 'team', 'doctor'}
+    return first not in {'-h', '--help'}
 
 
 def _extract_interactive_output(payload: dict) -> str:

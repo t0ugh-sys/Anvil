@@ -284,6 +284,8 @@ def build_layered_config(
     workspace_root: Path | None = None,
     cli_args: Dict[str, Any] | None = None,
     env_prefix: str = 'ANVIL_',
+    *,
+    validate: bool = False,
 ) -> LayeredConfig:
     """Build a LayeredConfig with all discovered layers.
 
@@ -291,6 +293,12 @@ def build_layered_config(
         workspace_root: Project workspace root for project/local configs
         cli_args: CLI arguments (highest precedence)
         env_prefix: Prefix for environment variables
+        validate: If True, validate the merged result against the known
+            config schema and exit(1) with a readable error list instead
+            of returning an invalid config. Off by default because env
+            vars and CLI args may legitimately carry fields outside the
+            schema (e.g. debug flags); opt in when you want fail-fast
+            behavior for a specific entrypoint.
 
     Returns:
         Fully populated LayeredConfig
@@ -340,6 +348,11 @@ def build_layered_config(
         filtered = {k: v for k, v in cli_args.items() if v is not None}
         if filtered:
             config.add_layer('cli', 'command-line', filtered)
+
+    if validate:
+        from .schema import validate_or_exit
+
+        validate_or_exit(config.to_dict())
 
     return config
 

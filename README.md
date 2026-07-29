@@ -1,6 +1,6 @@
 # Anvil
 
-Terminal-first coding agent runtime. Core pattern:
+Interactive coding agent with a conversational chat interface. Core pattern:
 
 ```python
 while model_is_calling_tools:
@@ -31,7 +31,7 @@ python -m pip install -e .
 python -m unittest discover -s tests -p "test_*.py" -v
 
 # Run
-python -m anvil.cli --goal "write hello world" --strategy demo --output json
+anvil
 ```
 
 ## Package Structure
@@ -64,28 +64,12 @@ See [docs/repo-layout.md](docs/repo-layout.md) for full structure details.
 
 ## Usage
 
-### Interactive mode
-
 ```bash
 anvil                           # start interactive session
 anvil --session-id <id>         # resume session
 ```
 
-Slash commands: `/help`, `/status`, `/history`, `/todo`, `/tools`, `/exit`
-
-### Batch mode
-
-```bash
-anvil code --goal "task description" --workspace . --provider anthropic --model claude-3-opus-20240229
-```
-
-### With skills
-
-```bash
-anvil code --goal "search for info" --skill web_search --skill memory
-```
-
-Built-in skills: `web_search`, `memory`, `files`, `commands`, `browser` (requires `playwright`)
+Slash commands: `/help`, `/status`, `/history`, `/todo`, `/tools`, `/pricing`, `/exit`
 
 Skills live in `skills/` at the repo root. Each skill follows the layout:
 
@@ -93,31 +77,35 @@ Skills live in `skills/` at the repo root. Each skill follows the layout:
 skills/<name>/SKILL.md    # skill manifest and instructions
 ```
 
+Built-in skills: `web_search`, `memory`, `files`, `commands`, `browser` (requires `playwright`)
+
 ### Built-in tools
 
 Key tools available to the agent: `todo_write`, `todo_reminder`, `run_command`, `read_file`, `write_file`, `search_files`.
 
 ## Provider Configuration
 
+Set the API key for your provider, then launch the interactive UI — it will pick up the provider and model from your session config or `/status` settings.
+
 ### Anthropic
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-xxx
-python -m anvil.cli --goal "task" --strategy json_llm --provider anthropic --model claude-3-opus-20240229
+anvil
 ```
 
 ### OpenAI
 
 ```bash
 export OPENAI_API_KEY=sk-xxx
-python -m anvil.cli --goal "task" --strategy json_llm --provider openai_compatible --model gpt-4o-mini
+anvil
 ```
 
 ### Gemini
 
 ```bash
 export GEMINI_API_KEY=xxx
-python -m anvil.cli --goal "task" --strategy json_llm --provider gemini --model gemini-pro
+anvil
 ```
 
 ## Run Recording

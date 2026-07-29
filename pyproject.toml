@@ -22,15 +22,15 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-browser = ["playwright"]
-all = ["playwright"]
-dev = []
+browser = ["playwright>=1.40.0"]
+yaml = ["pyyaml>=6.0"]
 tui = ["textual>=0.86.2"]
 chat = ["rich>=13.0"]
+all = ["anvil[browser,yaml,tui,chat]"]
+dev = ["anvil[all]"]
 
 [project.scripts]
 anvil = "anvil.entrypoints.agent:main"
-anvil-core = "anvil.cli:main"
 anvil-chat = "anvil.ui.rich_chat:main"
 
 [project.urls]

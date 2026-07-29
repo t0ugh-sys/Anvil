@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-agent orchestration**: dependency-aware task graph and scheduler, subagent runtime, persistent mailbox, isolated git worktrees per subagent, capability-based tool policies
+- **Claude API optimizations**: prompt caching (`PromptCache`), extended thinking passback, streaming responses, native token counting, stop sequences, Batch API client with ~50% cost savings, dynamic `CostTracker` pricing backed by `llm/pricing.json`
+- **Context compression**: multi-layer compaction engine (micro/partial/hierarchical strategies) with persisted checkpoints
+- **Interactive runtime**: Claude Code-style terminal session with slash commands (`/help`, `/status`, `/history`, `/todo`, `/tools`, `/model`, `/pricing`, `/exit`), permission modes, session persistence and resume
+- **GitHub tools**: `gh` CLI wrappers for repo/issue/PR workflows
+- **Reliability**: circuit breaker for repeated tool failures, PII filtering, security monitor, input sanitization, importance-scored context retention
+- **Rich terminal UI**: boxed tool-call rendering, status bar with token usage, themed chrome components; optional Textual-based TUI with runtime provider/model pickers
+- Windows CI matrix (Python 3.10–3.13 on ubuntu-latest and windows-latest)
+- Provider-specific optional dependency extras in `pyproject.toml` (`browser`, `yaml`, `tui`, `chat`, `all`, `dev`)
+- Config schema validation (`anvil/config/schema.py`): `validate_config()`/`validate_or_exit()` catch unknown fields and out-of-range values in layered config before they turn into runtime `KeyError`s; opt in via `build_layered_config(..., validate=True)`
+
+### Changed
+
+- Reorganized package layout: `src/anvil/` → `anvil/` at repo root; internal subpackages `infra/`, `config/`, `agent/`, `runtime/`, `compression/`; `docker/`, `docs/`, `examples/` split out of the repo root
+- Split the single `providers.py` module into an `llm/` subpackage with per-provider modules (`anthropic/`, `gemini.py`, `openai_compat.py`, `mock.py`)
+- Split `anvil/ops/github_tools.py` into a `github/` subpackage (`_shared.py`, `repo.py`, `issues.py`, `pulls.py`); `github_tools.py` is now a backward-compatibility shim
+- Reduced built-in tool count from 32 to 12; tool execution now runs in parallel via a thread pool
+- Removed backward-compatibility shims after the package reorg; all internal imports use canonical subpackage paths
+
+### Fixed
+
+- Rich Chat (`anvil-chat`) status bar now shows real token usage against the provider's context window instead of an empty progress bar
+
+### Removed
+
+- Batch/CLI interface (`anvil/cli.py`, `anvil/agent_cli.py`, `anvil doctor`, `update-pricing` subcommand) in favor of the interactive runtime; pricing lookups now live in the `/pricing` slash command
+
 ## [0.1.0] - 2025-03-05
 
 ### Added

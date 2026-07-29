@@ -47,12 +47,12 @@ pip install -e .
 # Run JSON loop demo
 python examples/json_loop_stub_demo.py
 
-# Run with config
-python -m anvil.agent_cli code --config config.yaml --goal "your goal"
+# Launch interactive session
+anvil
 
 # Use docker
 docker build -t anvil .
-docker run anvil --goal "your goal"
+docker run -it anvil
 ```
 
 ## Advanced Usage

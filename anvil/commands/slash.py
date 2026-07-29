@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable
 
 from ..runtime.session import SessionStore
@@ -69,6 +71,53 @@ def parse_slash_command(line: str) -> SlashCommand | None:
     return SlashCommand(name=parts[0].lower(), argument=parts[1].strip() if len(parts) > 1 else '')
 
 
+def _execute_pricing_command(argument: str) -> CommandResult:
+    from ..llm.usage import PRICING_FILE, _CLAUDE_PRICING, _load_pricing_from_file
+
+    parts = argument.split()
+
+    def _load_file_data() -> dict:
+        data = _load_pricing_from_file()
+        if data is None:
+            return {'updated_at': '', 'models': dict(_CLAUDE_PRICING)}
+        try:
+            raw = json.loads(PRICING_FILE.read_text(encoding='utf-8'))
+            return raw if isinstance(raw, dict) else {'updated_at': '', 'models': dict(_CLAUDE_PRICING)}
+        except Exception:
+            return {'updated_at': '', 'models': dict(_CLAUDE_PRICING)}
+
+    if not parts:
+        file_data = _load_file_data()
+        return CommandResult(output=json.dumps(file_data, indent=2, ensure_ascii=False))
+
+    if len(parts) == 5:
+        model_key, input_s, output_s, cache_write_s, cache_read_s = parts
+        try:
+            entry = {
+                'input': float(input_s),
+                'output': float(output_s),
+                'cache_write': float(cache_write_s),
+                'cache_read': float(cache_read_s),
+            }
+        except ValueError:
+            return CommandResult(
+                output='Usage: /pricing <model> <input> <output> <cache_write> <cache_read>\n'
+                       'All price values must be numbers (USD per million tokens).'
+            )
+        file_data = _load_file_data()
+        file_data.setdefault('models', {})[model_key] = entry
+        file_data['updated_at'] = datetime.now(tz=timezone.utc).strftime('%Y-%m-%d')
+        PRICING_FILE.write_text(json.dumps(file_data, indent=2), encoding='utf-8')
+        return CommandResult(output=f'Updated pricing for {model_key!r}.')
+
+    return CommandResult(
+        output='Usage:\n'
+               '  /pricing                                          Show current pricing table\n'
+               '  /pricing <model> <input> <output> <cw> <cr>      Add or update a model entry\n'
+               'Prices are in USD per million tokens.'
+    )
+
+
 def execute_slash_command(
     command: SlashCommand,
     *,
@@ -90,6 +139,7 @@ def execute_slash_command(
                 '/tools  List available tools\n'
                 '/panel  Show the full session panel\n'
                 '/resume Show the combined session recap\n'
+                '/pricing Show or update the LLM pricing table\n'
                 '/exit   Exit the interactive runtime'
             )
         )
@@ -117,6 +167,8 @@ def execute_slash_command(
         return CommandResult(output=format_session_panel(session_store))
     if command.name == 'resume':
         return CommandResult(output=format_session_panel(session_store, history_limit=10, event_limit=10))
+    if command.name == 'pricing':
+        return _execute_pricing_command(command.argument)
     if command.name == 'exit':
         return CommandResult(output='bye', should_continue=False)
     return CommandResult(output=f'Unknown command: /{command.name}')

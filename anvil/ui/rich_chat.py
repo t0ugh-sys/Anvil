@@ -45,6 +45,8 @@ from .chrome import (
     status_bar,
     truncate,
 )
+from ..llm.usage import TokenUsageTracker
+from ..token_estimation import estimate_messages_tokens
 
 try:
     from rich.console import Console
@@ -72,6 +74,7 @@ class ChatConfig:
     temperature: float
     provider_timeout_s: float
     history_limit: int
+    max_tokens: int = 200_000
 
 
 PROVIDERS = ['openai_compatible', 'anthropic', 'gemini']
@@ -80,6 +83,14 @@ PROVIDER_LABELS: Dict[str, str] = {
     'openai_compatible': 'OpenAI Compatible',
     'anthropic': 'Anthropic',
     'gemini': 'Gemini',
+}
+
+# Approximate context-window size per provider, used only to size the
+# token progress bar in the status line (not enforced anywhere).
+PROVIDER_CONTEXT_WINDOW: Dict[str, int] = {
+    'openai_compatible': 128_000,
+    'anthropic': 200_000,
+    'gemini': 1_000_000,
 }
 
 PROVIDER_DEFAULTS: Dict[str, Dict[str, str]] = {
@@ -159,6 +170,7 @@ def _build_provider_config(current_cfg: ChatConfig, provider: str) -> ChatConfig
         temperature=current_cfg.temperature,
         provider_timeout_s=current_cfg.provider_timeout_s,
         history_limit=current_cfg.history_limit,
+        max_tokens=PROVIDER_CONTEXT_WINDOW.get(provider, current_cfg.max_tokens),
     )
 
 
@@ -172,6 +184,7 @@ def _build_model_config(current_cfg: ChatConfig, model: str) -> ChatConfig:
         temperature=current_cfg.temperature,
         provider_timeout_s=current_cfg.provider_timeout_s,
         history_limit=current_cfg.history_limit,
+        max_tokens=current_cfg.max_tokens,
     )
 
 
@@ -186,18 +199,20 @@ def _detect_provider_from_url(url: str, default: str) -> str:
 
 # ============== Chat Invoke ==============
 
-def _build_chat_invoke(cfg: ChatConfig):
+def _build_chat_invoke(cfg: ChatConfig, *, usage_tracker: TokenUsageTracker | None = None):
     if cfg.provider == 'openai_compatible':
         from ..llm.providers import openai_compatible_chat_invoke_factory
         api_key = os.getenv(cfg.api_key_env, '').strip()
         if not api_key:
             raise SystemExit(f'missing api key env: {cfg.api_key_env}')
-        return openai_compatible_chat_invoke_factory(
+        invoke = openai_compatible_chat_invoke_factory(
             base_url=cfg.base_url, api_key=api_key, model=cfg.model,
             fallback_models=[], temperature=cfg.temperature,
             timeout_s=cfg.provider_timeout_s, debug=False, extra_headers={},
             max_retries=2, retry_backoff_s=1.0, retry_http_codes={502, 503, 504, 524},
+            usage_tracker=usage_tracker,
         )
+        return lambda prompt: invoke([{'role': 'user', 'content': prompt}])
 
     if cfg.provider == 'anthropic':
         from ..llm.providers import anthropic_invoke_factory
@@ -208,6 +223,7 @@ def _build_chat_invoke(cfg: ChatConfig):
             api_key=api_key, model=cfg.model,
             base_url=cfg.base_url,
             temperature=cfg.temperature, timeout_s=cfg.provider_timeout_s, debug=False,
+            usage_tracker=usage_tracker,
         )
 
     if cfg.provider == 'gemini':
@@ -230,6 +246,13 @@ def _append_jsonl(path: Path, row: Dict[str, Any]) -> None:
     with path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False))
         f.write('\n')
+
+
+def _current_tokens_used(tracker: TokenUsageTracker, messages: List[Dict[str, str]]) -> int:
+    """Prefer exact API-reported usage; fall back to a heuristic estimate."""
+    if tracker.call_count > 0:
+        return tracker.total_input_tokens + tracker.total_output_tokens
+    return estimate_messages_tokens(messages)
 
 
 def _load_messages(path: Path, limit: int) -> List[Dict[str, str]]:
@@ -268,7 +291,7 @@ def _status_line(cfg: ChatConfig, *, width: int) -> str:
     return truncate(f'  {cfg.model} {DOT_SEPARATOR} {provider} {DOT_SEPARATOR} {Path.cwd()}', width)
 
 
-def _print_welcome(console: Console, cfg: ChatConfig, *, chat_dir: Path) -> None:
+def _print_welcome(console: Console, cfg: ChatConfig, *, chat_dir: Path, tokens_used: int = 0) -> None:
     width = _ui_width(console)
 
     # Header banner
@@ -310,7 +333,10 @@ def _print_welcome(console: Console, cfg: ChatConfig, *, chat_dir: Path) -> None
     console.print(hint)
 
     # Status bar
-    sb = status_bar(cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()), width=width)
+    sb = status_bar(
+        cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()),
+        width=width, tokens_used=tokens_used, max_tokens=cfg.max_tokens,
+    )
     console.print(sb, style='anvil.status', markup=False)
     console.print()
 
@@ -351,7 +377,7 @@ def _print_help(console: Console, cfg: ChatConfig) -> None:
     _print_footer(console, cfg)
 
 
-def _print_response(console: Console, text: str, cfg: ChatConfig) -> None:
+def _print_response(console: Console, text: str, cfg: ChatConfig, *, tokens_used: int = 0) -> None:
     width = _ui_width(console)
     console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
     if HAS_RICH:
@@ -367,7 +393,10 @@ def _print_response(console: Console, text: str, cfg: ChatConfig) -> None:
             else:
                 console.print(line, style='anvil.output', markup=False)
     console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
-    sb = status_bar(cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()), width=width)
+    sb = status_bar(
+        cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()),
+        width=width, tokens_used=tokens_used, max_tokens=cfg.max_tokens,
+    )
     console.print(sb, style='anvil.status', markup=False)
     console.print()
 
@@ -441,13 +470,15 @@ def run(argv: Optional[list[str]] = None) -> int:
     )
 
     console = Console(theme=THEME)
+    usage_tracker = TokenUsageTracker()
     try:
-        invoke = _build_chat_invoke(cfg)
+        invoke = _build_chat_invoke(cfg, usage_tracker=usage_tracker)
     except SystemExit as e:
         console.print(f'[anvil.error]{e}[/anvil.error]')
         return 1
 
-    _print_welcome(console, cfg, chat_dir=chat_dir)
+    initial_tokens = _current_tokens_used(usage_tracker, _load_messages(messages_path, cfg.history_limit))
+    _print_welcome(console, cfg, chat_dir=chat_dir, tokens_used=initial_tokens)
 
     while True:
         try:
@@ -526,7 +557,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                     continue
                 try:
                     new_cfg = _build_model_config(cfg, arg)
-                    invoke = _build_chat_invoke(new_cfg)
+                    invoke = _build_chat_invoke(new_cfg, usage_tracker=usage_tracker)
                     cfg = new_cfg
                 except Exception as e:
                     console.print(f'[anvil.error]{e}[/anvil.error]')
@@ -559,7 +590,7 @@ def run(argv: Optional[list[str]] = None) -> int:
                     continue
                 try:
                     new_cfg = _build_provider_config(cfg, arg)
-                    invoke = _build_chat_invoke(new_cfg)
+                    invoke = _build_chat_invoke(new_cfg, usage_tracker=usage_tracker)
                     cfg = new_cfg
                 except Exception as e:
                     console.print(f'[anvil.error]{e}[/anvil.error]')
@@ -635,7 +666,8 @@ def run(argv: Optional[list[str]] = None) -> int:
             'ts': datetime.now(timezone.utc).isoformat(),
         })
 
-        _print_response(console, reply, cfg)
+        tokens_used = _current_tokens_used(usage_tracker, _load_messages(messages_path, cfg.history_limit))
+        _print_response(console, reply, cfg, tokens_used=tokens_used)
 
 
 def main() -> None:
