@@ -59,7 +59,7 @@ See [docs/repo-layout.md](docs/repo-layout.md) for full structure details.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10+ (3.11+ recommended)
 - Node 18+ (for npm wrapper)
 
 ## Usage
