@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Set
 
 from ._types import InvokeFn
-from ._http import ProviderHttpError, _http_post_json, _request_with_retry
+from ._http import _http_post_json, _request_with_retry
+from ..errors import ProviderError, ProviderResponseError
 
 
 def _gemini_invoke_factory(
@@ -42,21 +43,16 @@ def _gemini_invoke_factory(
             )
             candidates = response.get('candidates', [])
             if not candidates:
-                raise ValueError('invalid Gemini response: no candidates')
+                raise ProviderResponseError('invalid Gemini response: no candidates')
             content = candidates[0].get('content', {})
             parts = content.get('parts', [])
             if not parts:
-                raise ValueError('invalid Gemini response: no parts')
+                raise ProviderResponseError('invalid Gemini response: no parts')
             return parts[0].get('text', '')
-        except ProviderHttpError as exc:
-            error_msg = f'Gemini API error: HTTP {exc.status_code}'
-            if debug and exc.body:
-                error_msg += f' - {exc.body[:200]}'
-            elif exc.body:
-                error_msg += f' - {exc.body[:100]}'
-            raise ValueError(error_msg) from exc
+        except ProviderError:
+            raise
         except (KeyError, IndexError) as exc:
-            raise ValueError('invalid Gemini response format') from exc
+            raise ProviderResponseError('invalid Gemini response format') from exc
 
     return invoke
 

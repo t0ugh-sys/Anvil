@@ -197,7 +197,14 @@ class AgentCliTests(unittest.TestCase):
                                 (),
                                 {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
                             )()
-                            runner = build_interactive_turn_runner(args, session_id='s1')
+                            from anvil.llm.usage import TokenUsageTracker
+                            from anvil.llm.rate_limit import RateLimitTracker
+                            runner = build_interactive_turn_runner(
+                                args,
+                                session_id='s1',
+                                usage_tracker=TokenUsageTracker(),
+                                rate_limit_tracker=RateLimitTracker(),
+                            )
                             output = runner('create file')
 
         self.assertEqual(output, 'done')

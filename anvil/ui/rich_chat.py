@@ -215,16 +215,28 @@ def _build_chat_invoke(cfg: ChatConfig, *, usage_tracker: TokenUsageTracker | No
         return lambda prompt: invoke([{'role': 'user', 'content': prompt}])
 
     if cfg.provider == 'anthropic':
-        from ..llm.providers import anthropic_invoke_factory
+        from ..llm.providers import anthropic_stream_invoke_factory
         api_key = os.getenv(cfg.api_key_env, '').strip()
         if not api_key:
             raise SystemExit(f'missing api key env: {cfg.api_key_env}')
-        return anthropic_invoke_factory(
+        _chunk_cb: list = [None]
+        _stream_fn = anthropic_stream_invoke_factory(
             api_key=api_key, model=cfg.model,
             base_url=cfg.base_url,
             temperature=cfg.temperature, timeout_s=cfg.provider_timeout_s, debug=False,
             usage_tracker=usage_tracker,
+            on_chunk=lambda text: _chunk_cb[0](text) if _chunk_cb[0] is not None else None,
         )
+
+        def _anthropic_invoke(prompt: str, *, _on_chunk=None) -> str:
+            _chunk_cb[0] = _on_chunk
+            try:
+                resp = _stream_fn([{'role': 'user', 'content': prompt}])
+            finally:
+                _chunk_cb[0] = None
+            return resp.text
+
+        return _anthropic_invoke
 
     if cfg.provider == 'gemini':
         from ..llm.providers import gemini_invoke_factory
@@ -426,6 +438,53 @@ def _safe_print_markdown(console: Console, text: str) -> None:
             console.print(safe)
     except Exception:
         _safe_print(console, text)
+
+
+# ============== Streaming Response ==============
+
+def _print_streaming_response(
+    console: Console,
+    cfg: ChatConfig,
+    *,
+    invoke,
+    prompt: str,
+    tokens_used: int = 0,
+) -> str:
+    width = _ui_width(console)
+    # erase the "Working..." line
+    sys.stdout.write('\x1b[1A\x1b[2K')
+    sys.stdout.flush()
+
+    console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
+    console.print(f'  {RESPONSE_MARKER} ', style='anvil.response', end='')
+
+    full_text: list[str] = []
+
+    def on_chunk(text: str) -> None:
+        full_text.append(text)
+        try:
+            console.file.write(text)
+            console.file.flush()
+        except UnicodeEncodeError:
+            enc = getattr(console.file, 'encoding', None) or 'utf-8'
+            console.file.write(text.encode(enc, errors='replace').decode(enc))
+            console.file.flush()
+
+    try:
+        invoke(prompt, _on_chunk=on_chunk)
+    except Exception as e:
+        console.print()
+        return f'ERROR: {e}'
+
+    console.print()
+    console.print(f'  {separator_line(width - 4)}', style='anvil.separator')
+    sb = status_bar(
+        cfg.model, PROVIDER_LABELS.get(cfg.provider, cfg.provider), str(Path.cwd()),
+        width=width, tokens_used=tokens_used, max_tokens=cfg.max_tokens,
+    )
+    console.print(sb, style='anvil.status', markup=False)
+    console.print()
+    return ''.join(full_text)
 
 
 # ============== REPL ==============
@@ -654,20 +713,26 @@ def run(argv: Optional[list[str]] = None) -> int:
         })
         console.print(f'  {WORKING_MARKER} Working...', style='anvil.working', markup=False)
 
-        try:
-            messages = _load_messages(messages_path, cfg.history_limit)
-            llm_prompt = '\n'.join(f'{m["role"]}: {m["content"]}' for m in messages)
-            reply = invoke(llm_prompt)
-        except Exception as e:
-            reply = f'ERROR: {e}'
+        messages = _load_messages(messages_path, cfg.history_limit)
+        llm_prompt = '\n'.join(f'{m["role"]}: {m["content"]}' for m in messages)
+
+        if cfg.provider == 'anthropic':
+            tokens_used = _current_tokens_used(usage_tracker, messages)
+            reply = _print_streaming_response(
+                console, cfg, invoke=invoke, prompt=llm_prompt, tokens_used=tokens_used,
+            )
+        else:
+            try:
+                reply = invoke(llm_prompt)
+            except Exception as e:
+                reply = f'ERROR: {e}'
+            tokens_used = _current_tokens_used(usage_tracker, _load_messages(messages_path, cfg.history_limit))
+            _print_response(console, reply, cfg, tokens_used=tokens_used)
 
         _append_jsonl(messages_path, {
             'role': 'assistant', 'text': reply,
             'ts': datetime.now(timezone.utc).isoformat(),
         })
-
-        tokens_used = _current_tokens_used(usage_tracker, _load_messages(messages_path, cfg.history_limit))
-        _print_response(console, reply, cfg, tokens_used=tokens_used)
 
 
 def main() -> None:

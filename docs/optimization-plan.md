@@ -106,7 +106,7 @@ class CostTracker:
         ...
 ```
 
-同时提供 `anvil update-pricing` 子命令供 CI 定期更新 `pricing.json`。
+定价更新已通过交互式 `/pricing` slash 命令实现，可查看或覆写 `pricing.json` 中的条目（`/pricing <model> <input> <output> <cw> <cr>`）。
 
 ---
 
@@ -160,40 +160,40 @@ if sys.platform == "win32":
 
 ## 3. P1 — 核心质量提升
 
-### 3.1 异步化关键路径
+### 3.1 异步化关键路径 · 阶段一 ✅ 已实现
 
 **现状**：全同步 + `ThreadPoolExecutor`。流式响应 `anthropic_stream_invoke_factory` 用同步 SSE 读取，阻塞调用线程。
 
 **渐进式方案**（不做全量重写）：
 
-1. **阶段一**：为 `providers.py` 中的网络 I/O 引入 `asyncio`，对外暴露 `async def invoke_async()`，同步接口用 `asyncio.run()` 封装保持兼容。
-2. **阶段二**：`tool_use_loop.py` 改为 `async` 循环，工具并行执行改用 `asyncio.gather()`，废弃 `ThreadPoolExecutor`。
-3. **阶段三**：`team_runtime.py` / `mailbox.py` 改为原生 async，消除锁竞争。
+1. **阶段一** ✅：`anvil/llm/_http.py` 新增 `_http_post_json_async()`（`asyncio.to_thread` 包裹同步 urllib，零新依赖）；`anvil/llm/anthropic/client.py` 新增 `anthropic_async_invoke_factory()` / `_anthropic_async_invoke_factory()`，对外暴露 `async def invoke(prompt: str) -> str`（`AsyncInvokeFn` 类型见 `_types.py`），内含独立的异步重试/退避逻辑；同步接口 `anthropic_invoke_factory()` 保持不变、未受影响。测试见 `tests/test_anthropic_async.py`。
+2. **阶段二**（待办）：`tool_use_loop.py` 改为 `async` 循环，工具并行执行改用 `asyncio.gather()`，废弃 `ThreadPoolExecutor`。
+3. **阶段三**（待办）：`team_runtime.py` / `mailbox.py` 改为原生 async，消除锁竞争。
 
-**风险**：Python 3.10 async 兼容性需验证，特别是 Windows 上的 `asyncio` 事件循环策略。
+**风险**：Python 3.10 async 兼容性需验证，特别是 Windows 上的 `asyncio` 事件循环策略。阶段一使用 `asyncio.to_thread`，在 Windows `ProactorEventLoop` 下行为等同线程池，风险较低。
 
 ---
 
-### 3.2 Batch API 可靠性增强
+### 3.2 Batch API 可靠性增强 ✅ 已实现
 
-**现状**：提交+轮询模式，无持久化，进程重启后任务状态丢失。
-
-**方案**：
+**现状**：`anvil/llm/anthropic/batch.py` 中 `BatchJobStore` 已实现（SQLite 持久化，零额外依赖），`AnthropicBatchClient` 接受可选 `store: BatchJobStore | None` 参数：
 
 ```python
-# src/anvil/llm/anthropic/batch.py
-
 class BatchJobStore:
     """SQLite-backed 持久化，零额外依赖（stdlib sqlite3）"""
-    def save(self, batch_id: str, requests: list[BatchRequest], metadata: dict): ...
+    def save(self, batch_id: str, model: str, metadata: dict) -> None: ...
     def load_pending(self) -> list[BatchJob]: ...
-    def mark_done(self, batch_id: str, results: list[BatchResult]): ...
+    def mark_done(self, batch_id: str, status: str = 'ended') -> None: ...
 
 class AnthropicBatchClient:
-    def __init__(self, store: BatchJobStore | None = None): ...
-    async def poll_until_done(self, batch_id: str, timeout_s: int = 3600): ...
-    def resume_pending_jobs(self): ...  # 进程启动时自动恢复
+    def __init__(self, ..., store: BatchJobStore | None = None): ...
+    def submit(self, requests, metadata=None) -> str: ...       # 存在 store 时自动 save()
+    def get_results(self, batch_id) -> list[BatchResult]: ...   # 完成后自动 mark_done()
+    def cancel(self, batch_id) -> dict: ...                     # 取消后自动 mark_done(status='cancelled')
+    def resume_pending_jobs(self) -> list[BatchJob]: ...        # 进程启动时调用，委托给 store.load_pending()
 ```
+
+每个 SQLite 连接用完即关闭（避免 Windows 下文件句柄泄漏）。测试见 `tests/test_batch_job_store.py` 与 `tests/integration/test_batch_workflow.py::TestBatchClientWithStore`。
 
 ---
 
@@ -217,73 +217,23 @@ self._emit(LoopEvent(type="tool_call", ...))  # 已有 hooks 机制扩展即可
 
 ---
 
-### 3.4 统一异常体系
+### 3.4 统一异常体系 ✅ 已实现
 
-**现状**：各模块抛出裸 `Exception`、`ValueError`、`RuntimeError` 混用，`tool_use_loop.py` 无法区分"Provider 限流"和"工具执行失败"，导致错误处理粗粒度、日志噪声大。
-
-**方案**：
-
-```python
-# src/anvil/exceptions.py
-
-class AnvilError(Exception):
-    """所有 Anvil 异常的基类"""
-
-class ProviderError(AnvilError):
-    """LLM Provider 相关错误"""
-
-class RateLimitError(ProviderError):
-    retry_after: float | None  # 从 header 读取
-
-class AuthError(ProviderError): ...
-class ModelNotFoundError(ProviderError): ...
-
-class ToolError(AnvilError):
-    tool_name: str
-
-class ToolTimeoutError(ToolError): ...
-class ToolPermissionDeniedError(ToolError): ...
-
-class SessionError(AnvilError): ...
-class CompactionError(AnvilError): ...
-class ConfigError(AnvilError): ...
-```
-
-`tool_use_loop.py` 按类型分级：`RateLimitError` → 等待重试；`AuthError` → 立即终止；`ToolError` → 返回错误结果继续循环。
+**实现**：`ProviderError(AnvilError, ValueError)` MRO 继承（向后兼容），`_map_http_error()` 在 `anvil/llm/_http.py` 实现 HTTP→语义异常映射（429→`RateLimitError(retry_after=...)`，401/403→`AuthError`，404→`ModelNotFoundError`，`URLError`→`ProviderTimeoutError`，其他→`ProviderResponseError`）。`Retry-After` 响应头在 `_http_post_json` 层解析并传入 `ProviderHttpError.retry_after`。`anthropic/client.py` 和 `gemini.py` 已移除裸 `ValueError` 转换。14 个新测试通过：`tests/test_provider_exceptions.py`。
 
 ---
 
-### 3.5 API 速率限制感知
+### 3.5 API 速率限制感知 ✅ 已实现
 
-**现状**：`retry.py` 有指数退避，但未读取 Anthropic 响应头中的速率限制信息，多 Agent 并发时触发 `429` 后盲目重试，浪费时间并加剧限流。
+**现状**：`RateLimitTracker`（`anvil/llm/rate_limit.py`）已实现并接入交互式运行时。从 Anthropic 响应头读取剩余请求数/token 数及重置时间，通过 `/status` 命令可查看当前速率限制状态。`InteractiveRuntime` 和 `build_interactive_turn_runner` 均已接受 `rate_limit_tracker` 参数并在整个会话中共享同一实例。
 
-**方案**：
-
-```python
-# src/anvil/llm/anthropic/client.py
-
-RATE_LIMIT_HEADERS = {
-    "x-ratelimit-remaining-requests",
-    "x-ratelimit-remaining-tokens",
-    "x-ratelimit-reset-requests",   # ISO 8601 时间戳
-}
-
-class RateLimitTracker:
-    def update(self, headers: dict): ...
-    def should_throttle(self) -> bool: ...
-    def wait_time(self) -> float: ...  # 主动等待，避免触发 429
-
-# 在 with_retry 中注入 RateLimitTracker：
-# 收到 429 时，读取 retry-after header，精确等待而非指数退避
-```
-
-对多 Agent 场景（`team_runtime.py`），共享一个全局 `RateLimitTracker` 实例，协调整体请求速率。
+对多 Agent 场景（`team_runtime.py`），后续可将同一 `RateLimitTracker` 实例共享给所有子 Agent，协调整体请求速率（待 P1 异步化阶段完成后统一处理）。
 
 ---
 
-### 3.6 配置 Schema 验证
+### 3.6 配置 Schema 验证 ✅ 已实现
 
-**现状**：`layered_config.py` 11KB，支持 env/YAML/JSON/args 多层合并，但无 schema 校验，用户写错字段名时静默忽略，运行时才暴露 `KeyError`。
+**现状**：`anvil/config/schema.py` 已实现完整的配置校验体系。`validate_config()` 检查所有已知字段的类型和取值范围，`validate_or_exit()` 在启动时 fast-fail，`build_layered_config(..., validate=True)` 可选开启校验。测试覆盖：`tests/test_config_schema.py`（12 个测试）。
 
 **方案**（纯 stdlib，不引入 pydantic）：
 
@@ -311,23 +261,9 @@ class AnvilConfig:
 
 ---
 
-### 3.7 会话与运行目录 GC
+### 3.7 会话与运行目录 GC ✅ 已实现
 
-**现状**：`.anvil/sessions/` 和 `.anvil/runs/` 随使用无限增长，无任何清理机制。
-
-**方案**：新增 `anvil gc` 子命令 + 可选自动 GC：
-
-```
-anvil gc [--dry-run] [--keep-days 30] [--keep-count 100]
-
-# 默认策略：
-# - 保留最近 30 天的 sessions（可配置）
-# - 保留最近 100 次 runs（可配置）
-# - --dry-run 只显示将要删除的内容，不实际删除
-# - 删除前打印摘要：「将释放 X MB，删除 Y 个会话」
-```
-
-同时在 `layered_config.py` 中添加 `gc.auto: true` 选项，启动时自动执行（默认关闭，需用户主动开启）。
+**现状**：`anvil/commands/slash.py` 中 `_execute_gc_command` 已实现 `/gc [--dry-run] [--keep-days 30] [--keep-count 100]`，支持按天数清理旧 sessions、按数量保留最近 runs、dry-run 预览。测试覆盖：`tests/test_slash_gc.py`（6 个测试）。
 
 ---
 
@@ -443,7 +379,7 @@ async def on_input_submitted(self, event: Input.Submitted) -> None:
 
 ## 4. P2 — 性能与成本优化
 
-### 4.1 Prompt Cache 命中率优化
+### 4.1 Prompt Cache 命中率优化 ✅ 已实现
 
 **现状**：`PromptCacheManager` 已实现 stable prefix + dynamic suffix 拆分，但 cache-control 注入时机依赖手动调用。
 
@@ -456,7 +392,7 @@ async def on_input_submitted(self, event: Input.Submitted) -> None:
 
 ---
 
-### 4.2 工具集精简与路由
+### 4.2 工具集精简与路由 ✅ 已实现
 
 **现状**：Zero2Agent 已将工具从 32 个精简到 12 个。进一步优化：
 
@@ -466,7 +402,7 @@ async def on_input_submitted(self, event: Input.Submitted) -> None:
 
 ---
 
-### 4.3 上下文压缩策略调优
+### 4.3 上下文压缩策略调优 ✅ 已实现
 
 **现状**：`CompactManager` 有四种策略，但触发阈值是静态配置。
 
@@ -477,7 +413,7 @@ async def on_input_submitted(self, event: Input.Submitted) -> None:
 
 ---
 
-### 4.4 Token 估算精度提升
+### 4.4 Token 估算精度提升 ✅ 已实现
 
 **现状**：`HybridTokenCounter` 本地估算 + API 计数 fallback。
 
@@ -487,7 +423,7 @@ async def on_input_submitted(self, event: Input.Submitted) -> None:
 
 ---
 
-### 4.5 性能基准套件
+### 4.5 性能基准套件 ✅ 已实现
 
 **现状**：无基准测试，任何重构都无法量化性能影响，回归无从发现。
 
@@ -515,7 +451,7 @@ CI 集成：
 
 ---
 
-### 4.6 Rich Chat 流式输出
+### 4.6 Rich Chat 流式输出 ✅ 已实现
 
 **现状**：等待完整响应后一次性渲染，对长回复体验差（无感知进度）。
 
@@ -590,17 +526,9 @@ dev       = ["anvil[all]", "pytest>=8.0", "pytest-asyncio>=0.24"]
 
 ---
 
-### 5.3 `anvil doctor` 增强
+### 5.3 `anvil doctor`（已移除）
 
-**现状**：`ops/doctor.py` 存在，但功能不详。
-
-**增强清单**：
-- 检查 Python 版本（≥ 3.10）
-- 检查已安装的可选依赖
-- 验证 API key 格式（不发送真实请求）
-- 检查 `.anvil/` 目录权限
-- 检查 Git 版本（worktree 功能需 ≥ 2.5）
-- 输出格式：`✅ / ⚠️ / ❌` 颜色化摘要
+`ops/doctor.py` 和对应的 CLI 子命令已在"Delete CLI"重构中一并删除。健康检查功能后续可通过 `/status` slash 命令扩展，或在首次启动时以警告形式内联输出（无需独立命令）。
 
 ---
 
@@ -751,17 +679,17 @@ class VectorMemoryStore:
 └── Week 4    │ [P1] 统一异常体系（AnvilError 层级） + CHANGELOG v0.2.0 发布
 
 2026 Q4
-├── Month 1   │ [P1] 异步化阶段一（providers async + asyncio Windows 策略）
+├── Month 1   │ [P1] 异步化阶段一（providers async + asyncio Windows 策略）✅
 ├── Month 1   │ [P1] API 速率限制感知（RateLimitTracker + 429 精确等待）
-├── Month 1   │ [P1] Rich Chat bug 修复（Markdown渲染、token进度条、模型列表）
-├── Month 1   │ [P1] TUI 重构（RichLog替换Static + asyncio.to_thread）
+├── Month 1   │ [P1] Rich Chat bug 修复（Markdown渲染、token进度条、模型列表）✅
+├── Month 1   │ [P1] TUI 重构（RichLog替换Static + asyncio.to_thread）✅
 ├── Month 1   │ [P2] Prompt Cache 命中率监控
-├── Month 2   │ [P1] Batch API 持久化（SQLite BatchJobStore）
+├── Month 2   │ [P1] Batch API 持久化（SQLite BatchJobStore）✅
 ├── Month 2   │ [P1] 配置 Schema 验证（启动时 fast-fail）
 ├── Month 2   │ [P2] Rich Chat 流式输出（逐 token 打字效果）
 ├── Month 2   │ [P3] examples/ 四个示例
 ├── Month 3   │ [P1] 工具循环可观测性 + /status 增强
-├── Month 3   │ [P1] anvil gc 命令（会话/运行目录清理）
+├── Month 3   │ [P1] /gc slash 命令（会话/运行目录清理）
 ├── Month 3   │ [P2] 性能基准套件 + CI 对比
 ├── Month 3   │ [P3] 主 agent 工具调用结构化渲染（tool_renderer.py）
 └── Month 3   │ [P3] 文档补全（4 篇新文档）
@@ -783,16 +711,15 @@ class VectorMemoryStore:
 | 集成测试数量 | 0 | ≥ 4 流程 | Q3 |
 | CI 平台矩阵 | Linux only | Linux + Windows | Q3 |
 | Prompt Cache 节省率（长会话） | 未监控 | ≥ 30% token | Q4 |
-| `anvil doctor` 检查项 | 未知 | ≥ 8 项 | Q4 |
+| `anvil doctor` 检查项 | 已移除（ops/doctor.py 随 CLI 一并删除） | — | — |
 | 文档覆盖（核心模块） | ~40% | ≥ 80% | Q4 |
 | 可运行示例数量 | 0 | ≥ 4 | Q4 |
 | CHANGELOG 更新频率 | 停滞 17 个月 | 每 release 更新 | Q3 起 |
 | 429 重试等待精度 | 盲目指数退避 | 读取 retry-after header | Q4 |
-| 会话目录 GC | 无 | anvil gc 可用 + 自动策略 | Q4 |
+| 会话目录 GC | 无 | `/gc` slash 命令可用 + 自动策略 | Q4 |
 | 基准测试工具循环吞吐 | 未测量 | > 50 ops/sec（Mock） | Q4 |
 | Rich Chat Markdown 渲染 | 未启用 | 正确渲染代码块/加粗/列表 | Q4 |
-| TUI LLM 调用阻塞 | 冻结 UI | asyncio.to_thread 非阻塞 | Q4 |
-| 主 agent 工具调用可视化 | 裸 print | box 渲染 + 耗时/状态 | Q4 |
+| TUI LLM 调用阻塞 | 冻结 UI | asyncio.to_thread 非阻塞 | Q4 |xxx
 | 语义记忆检索支持 | 无 | VectorMemoryStore v1 | 2027 Q1 |
 
 ---

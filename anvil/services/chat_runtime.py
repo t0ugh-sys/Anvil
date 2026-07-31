@@ -49,6 +49,8 @@ class InteractiveRuntime:
     stdout: TextIO
     model: str = ''
     permission_mode: str = ''
+    usage_tracker: object = None
+    rate_limit_tracker: object = None
 
     def run(self) -> int:
         self.tool_specs = tuple(self.tool_specs)
@@ -78,6 +80,8 @@ class InteractiveRuntime:
                     command,
                     session_store=self.session_store,
                     tool_specs=self.tool_specs,
+                    usage_tracker=self.usage_tracker,
+                    rate_limit_tracker=self.rate_limit_tracker,
                 )
                 self.session_store.append_event('chat_command', {'command': command.name, 'argument': command.argument})
                 self._write_response(result.output, width=width)

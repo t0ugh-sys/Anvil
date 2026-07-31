@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows CI matrix (Python 3.10–3.13 on ubuntu-latest and windows-latest)
 - Provider-specific optional dependency extras in `pyproject.toml` (`browser`, `yaml`, `tui`, `chat`, `all`, `dev`)
 - Config schema validation (`anvil/config/schema.py`): `validate_config()`/`validate_or_exit()` catch unknown fields and out-of-range values in layered config before they turn into runtime `KeyError`s; opt in via `build_layered_config(..., validate=True)`
+- Batch API persistence: `BatchJobStore` (SQLite-backed, stdlib `sqlite3`) survives process restarts; `AnthropicBatchClient` accepts an optional `store` to auto-save on `submit()`, mark done on `get_results()`/`cancel()`, and `resume_pending_jobs()` on startup
+- Session/run GC: `/gc [--dry-run] [--keep-days N] [--keep-count N]` slash command cleans up old `.anvil/sessions/` and `.anvil/runs/` directories; dry-run mode shows what would be removed without deleting; current session is always preserved
+- Async Anthropic invoke: `anthropic_async_invoke_factory()` / `_anthropic_async_invoke_factory()` in `anvil/llm/anthropic/client.py` expose an `AsyncInvokeFn`, backed by `_http_post_json_async()` (`asyncio.to_thread` wrapping the existing sync urllib call); sync `invoke()` is unchanged
+- Unified provider exception hierarchy: `ProviderError(AnvilError, ValueError)` MRO makes all provider errors catchable as `ValueError` for backward compatibility; `_map_http_error()` in `anvil/llm/_http.py` maps HTTP status codes to semantic types (`RateLimitError` with `retry_after`, `AuthError`, `ModelNotFoundError`, `ProviderTimeoutError`, `ProviderResponseError`); `Retry-After` response header parsed and propagated; `urllib.error.URLError` now raises `ProviderTimeoutError` instead of propagating uncaught
 
 ### Changed
 

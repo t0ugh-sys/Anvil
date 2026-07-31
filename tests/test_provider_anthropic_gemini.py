@@ -12,6 +12,7 @@ from anvil.llm.providers import (
     _prompt_has_successful_tool_result,
     _prompt_requires_file_tool,
     _prompt_should_force_write_file,
+    anthropic_stream_invoke_factory,
     build_invoke_from_args,
 )
 
@@ -146,6 +147,25 @@ class ProviderAnthropicTests(unittest.TestCase):
         finally:
             if backup is not None:
                 os.environ['ANTHROPIC_API_KEY'] = backup
+
+    def test_anthropic_stream_invoke_factory_accepts_on_chunk_callback(self) -> None:
+        """Test that anthropic_stream_invoke_factory accepts and wires up on_chunk callback."""
+        chunks_received = []
+
+        def chunk_handler(text: str) -> None:
+            chunks_received.append(text)
+
+        # Just verify factory accepts on_chunk parameter and creates invoke function
+        os.environ['ANTHROPIC_API_KEY'] = 'test-key'
+        try:
+            invoke = anthropic_stream_invoke_factory(
+                api_key='test-key',
+                model='claude-3-opus-20240229',
+                on_chunk=chunk_handler,
+            )
+            self.assertIsNotNone(invoke)
+        finally:
+            os.environ.pop('ANTHROPIC_API_KEY', None)
 
 
 class ProviderGeminiTests(unittest.TestCase):

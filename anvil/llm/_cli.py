@@ -9,6 +9,7 @@ from .mock import _mock_invoke_factory
 from .gemini import _gemini_invoke_factory
 from .openai_compat import _openai_compatible_invoke_factory
 from .anthropic import _anthropic_invoke_factory
+from .rate_limit import RateLimitTracker
 
 
 def _parse_common_provider_args(args: argparse.Namespace) -> dict:
@@ -56,7 +57,13 @@ def parse_provider_headers(items: List[str]) -> Dict[str, str]:
     return headers
 
 
-def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop') -> InvokeFn:
+def build_invoke_from_args(
+    args: argparse.Namespace,
+    *,
+    mode: str = 'json_loop',
+    usage_tracker=None,
+    rate_limit_tracker: RateLimitTracker | None = None,
+) -> InvokeFn:
     provider = str(getattr(args, 'provider', 'mock'))
     model = str(getattr(args, 'model', 'mock-model'))
 
@@ -80,6 +87,7 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
             timeout_s=common['timeout_s'], wire_api=wire_api, debug=common['debug'],
             extra_headers=extra_headers, max_retries=common['max_retries'],
             retry_backoff_s=common['retry_backoff_s'], retry_http_codes=common['retry_http_codes'],
+            usage_tracker=usage_tracker,
         )
 
     if provider == 'anthropic':
@@ -90,6 +98,8 @@ def build_invoke_from_args(args: argparse.Namespace, *, mode: str = 'json_loop')
             max_retries=common['max_retries'], retry_backoff_s=common['retry_backoff_s'],
             retry_http_codes=common['retry_http_codes'], debug=common['debug'],
             enable_native_tools=(mode == 'coding'),
+            usage_tracker=usage_tracker,
+            rate_limit_tracker=rate_limit_tracker,
         )
 
     if provider == 'gemini':

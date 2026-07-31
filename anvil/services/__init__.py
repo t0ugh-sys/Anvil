@@ -5,7 +5,6 @@ __all__ = [
     'build_coding_summarizer',
     'load_skills_from_args',
     'resolve_goal',
-    'run_code_command',
     'build_interactive_parser',
     'build_interactive_turn_runner',
     'run_interactive_command',

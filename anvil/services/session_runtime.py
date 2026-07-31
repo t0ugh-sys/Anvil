@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import List
 
 from ..coding_agent import run_coding_agent
+from ..config.layered import build_layered_config
 from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
+from ..llm.usage import TokenUsageTracker
+from ..llm.rate_limit import RateLimitTracker
 from ..runtime import CodeRuntime
 from ..runtime.session import SessionStore
 from ..agent.loop import _looks_like_file_action
@@ -149,7 +152,13 @@ def _looks_like_action_request(user_text: str) -> bool:
     return _looks_like_file_action(user_text)
 
 
-def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: str):
+def build_interactive_turn_runner(
+    base_args: argparse.Namespace,
+    *,
+    session_id: str,
+    usage_tracker: TokenUsageTracker,
+    rate_limit_tracker: RateLimitTracker,
+):
     def run_turn(user_text: str) -> str:
         turn_args = copy.deepcopy(base_args)
         turn_args.interactive_trusted_workspace = True
@@ -158,7 +167,9 @@ def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: 
         turn_args.goal_file = ''
         runtime = CodeRuntime(turn_args, goal=user_text)
         skills = load_skills_from_args(turn_args)
-        decider = build_coding_decider(turn_args, skills)
+        decider = build_coding_decider(
+            turn_args, skills, usage_tracker=usage_tracker, rate_limit_tracker=rate_limit_tracker
+        )
         summarizer = build_coding_summarizer(turn_args)
         if runtime.observer is not None:
             runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
@@ -195,6 +206,7 @@ def build_interactive_turn_runner(base_args: argparse.Namespace, *, session_id: 
 
 def run_interactive_command(args: argparse.Namespace, *, default_run_id: str) -> int:
     workspace_root = Path(args.workspace).resolve()
+    build_layered_config(workspace_root=workspace_root, validate=True)
     sessions_root = Path(args.sessions_dir)
     if not sessions_root.is_absolute():
         if str(args.sessions_dir) == '.anvil/sessions':
@@ -210,13 +222,22 @@ def run_interactive_command(args: argparse.Namespace, *, default_run_id: str) ->
             goal='',
             memory_run_dir=Path(args.memory_dir) / (args.run_id or default_run_id),
         )
+    usage_tracker = TokenUsageTracker()
+    rate_limit_tracker = RateLimitTracker()
     runtime = InteractiveRuntime(
         session_store=session_store,
         tool_specs=builtin_tool_specs(),
-        run_turn=build_interactive_turn_runner(args, session_id=session_store.state.session_id),
+        run_turn=build_interactive_turn_runner(
+            args,
+            session_id=session_store.state.session_id,
+            usage_tracker=usage_tracker,
+            rate_limit_tracker=rate_limit_tracker,
+        ),
         stdin=sys.stdin,
         stdout=sys.stdout,
         model=str(args.model),
         permission_mode=str(args.permission_mode),
+        usage_tracker=usage_tracker,
+        rate_limit_tracker=rate_limit_tracker,
     )
     return runtime.run()

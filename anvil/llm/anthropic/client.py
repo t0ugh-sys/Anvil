@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from .._types import InvokeFn
-from .._http import ProviderHttpError, _http_post_json, _request_with_retry
+from .._types import AsyncInvokeFn, InvokeFn
+from .._http import ProviderHttpError, _http_post_json, _http_post_json_async, _map_http_error, _request_with_retry
+from ...errors import ProviderError, ProviderResponseError
 from ..usage import TokenUsageTracker
+from ..rate_limit import RateLimitTracker
 from ._helpers import (
     _anthropic_file_tools,
     _prompt_requires_file_tool,
@@ -30,6 +32,7 @@ def _anthropic_invoke_factory(
     debug: bool = False,
     enable_native_tools: bool = False,
     usage_tracker: TokenUsageTracker | None = None,
+    rate_limit_tracker: RateLimitTracker | None = None,
     stop_sequences: List[str] | None = None,
     thinking_budget_tokens: int = 0,
     enable_prompt_caching: bool = True,
@@ -122,35 +125,38 @@ def _anthropic_invoke_factory(
             else:
                 payload['tool_choice'] = {'type': 'any'}
 
-        return _http_post_json(endpoint, payload, headers, timeout_s)
+        return _http_post_json(
+            endpoint, payload, headers, timeout_s,
+            return_headers=(rate_limit_tracker is not None),
+        )
 
     def invoke(prompt: str) -> str:
         try:
-            response = _request_with_retry(
+            raw = _request_with_retry(
                 request_fn=lambda: _request_once(prompt),
                 max_retries=max_retries,
                 retry_backoff_s=retry_backoff_s,
                 retry_http_codes=retry_http_codes,
             )
+            if rate_limit_tracker is not None and isinstance(raw, tuple):
+                response, resp_headers = raw
+                rate_limit_tracker.record_headers(resp_headers)
+            else:
+                response = raw
             # Track token usage from response
             if usage_tracker is not None:
                 usage = response.get('usage', {})
                 if isinstance(usage, dict):
                     usage_tracker.record(usage, model=model)
             return _extract_anthropic_text(response)
-        except ProviderHttpError as exc:
-            error_msg = f'Anthropic API error: HTTP {exc.status_code}'
-            if debug and exc.body:
-                error_msg += f' - {exc.body[:200]}'
-            elif exc.body:
-                error_msg += f' - {exc.body[:100]}'
-            raise ValueError(error_msg) from exc
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
+        except ProviderError:
+            raise
+        except (KeyError, IndexError, TypeError) as exc:
             detail = str(exc).strip()
             message = 'invalid Anthropic response format'
             if detail:
                 message = f'{message}: {detail}'
-            raise ValueError(message) from exc
+            raise ProviderResponseError(message) from exc
 
     return invoke
 
@@ -169,19 +175,108 @@ def anthropic_invoke_factory(
     thinking_budget_tokens: int = 0,
     enable_prompt_caching: bool = True,
 ) -> InvokeFn:
-    """Public wrapper for Anthropic provider with optional custom base_url.
-
-    Args:
-        enable_prompt_caching: When True (default), split system prompt from
-            user prompt and send with cache_control for 90% cost savings on
-            repeated calls. Requires ≥1024 tokens in the cached portion.
-    """
+    """Public wrapper for Anthropic provider with optional custom base_url."""
     return _anthropic_invoke_factory(
         api_key=api_key, model=model, temperature=temperature,
         timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
         retry_http_codes={502, 503, 504, 524}, base_url=base_url,
         debug=debug, enable_native_tools=enable_native_tools,
         usage_tracker=usage_tracker,
+        stop_sequences=stop_sequences,
+        thinking_budget_tokens=thinking_budget_tokens,
+        enable_prompt_caching=enable_prompt_caching,
+    )
+
+
+def _anthropic_async_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float,
+    timeout_s: float,
+    max_retries: int,
+    retry_backoff_s: float,
+    retry_http_codes: Set[int],
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+) -> AsyncInvokeFn:
+    endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
+    headers = {
+        'x-api-key': api_key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+    }
+
+    def _build_payload(prompt: str) -> dict:
+        max_tokens = (
+            max(thinking_budget_tokens + 4096, thinking_budget_tokens * 2)
+            if thinking_budget_tokens > 0 else 1024
+        )
+        payload: Dict[str, object] = {
+            'model': model,
+            'max_tokens': max_tokens,
+            'temperature': 1.0 if thinking_budget_tokens > 0 else temperature,
+        }
+        if stop_sequences:
+            payload['stop_sequences'] = stop_sequences
+        if thinking_budget_tokens > 0:
+            payload['thinking'] = {'type': 'enabled', 'budget_tokens': thinking_budget_tokens}
+        if enable_prompt_caching:
+            system_prompt, user_prompt = _split_system_user(prompt)
+            if system_prompt:
+                payload['system'] = [{'type': 'text', 'text': system_prompt, 'cache_control': {'type': 'ephemeral'}}]
+                payload['messages'] = [{'role': 'user', 'content': user_prompt}]
+                return payload
+        payload['messages'] = [{'role': 'user', 'content': prompt}]
+        return payload
+
+    async def invoke(prompt: str) -> str:
+        import asyncio
+        payload = _build_payload(prompt)
+        last_exc: ProviderHttpError | None = None
+        backoff = retry_backoff_s
+        for attempt in range(max_retries + 1):
+            try:
+                response = await _http_post_json_async(endpoint, payload, headers, timeout_s)
+                if usage_tracker is not None:
+                    usage = response.get('usage', {})
+                    if isinstance(usage, dict):
+                        usage_tracker.record(usage, model=model)
+                return _extract_anthropic_text(response)
+            except ProviderHttpError as exc:
+                if exc.status_code not in retry_http_codes or attempt == max_retries:
+                    last_exc = exc
+                    break
+                await asyncio.sleep(backoff * (2 ** attempt))
+        assert last_exc is not None
+        raise _map_http_error(last_exc) from last_exc
+
+    return invoke
+
+
+def anthropic_async_invoke_factory(
+    *,
+    api_key: str,
+    model: str,
+    temperature: float = 0.2,
+    timeout_s: float = 60.0,
+    base_url: str = '',
+    debug: bool = False,
+    usage_tracker: TokenUsageTracker | None = None,
+    stop_sequences: List[str] | None = None,
+    thinking_budget_tokens: int = 0,
+    enable_prompt_caching: bool = True,
+) -> AsyncInvokeFn:
+    """Async variant of anthropic_invoke_factory — returns an async invoke closure."""
+    return _anthropic_async_invoke_factory(
+        api_key=api_key, model=model, temperature=temperature,
+        timeout_s=timeout_s, max_retries=2, retry_backoff_s=1.0,
+        retry_http_codes={502, 503, 504, 524}, base_url=base_url,
+        debug=debug, usage_tracker=usage_tracker,
         stop_sequences=stop_sequences,
         thinking_budget_tokens=thinking_budget_tokens,
         enable_prompt_caching=enable_prompt_caching,

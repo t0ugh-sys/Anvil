@@ -51,12 +51,39 @@ __all__ = [
     'CacheSegment',
     'PromptCacheManager',
     'add_cache_control_hints',
+    # Model context windows
+    'context_window_for_model',
 ]
 
 # Compression thresholds (fraction of max_context_tokens)
 PARTIAL_COMPACT_THRESHOLD = 0.8
 FULL_COMPACT_THRESHOLD = 0.95
 MESSAGE_OVERHEAD_TOKENS = 10
+
+# Model context windows (tokens). Matched by prefix, longest first.
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    'claude-opus-5':     200_000,
+    'claude-sonnet-5':   200_000,
+    'claude-haiku-4-5':  200_000,
+    'claude-opus-4':     200_000,
+    'claude-sonnet-4':   200_000,
+    'claude-haiku-4':    200_000,
+    'claude-3-5-sonnet': 200_000,
+    'claude-3-5-haiku':  200_000,
+    'claude-3-opus':     200_000,
+    'claude-3-sonnet':   200_000,
+    'claude-3-haiku':    200_000,
+}
+_DEFAULT_CONTEXT_WINDOW = 200_000
+_COMPACT_FRACTION = 0.75  # use 75% of the window before compaction kicks in
+
+
+def context_window_for_model(model_id: str) -> int:
+    """Return the context window size in tokens for *model_id*."""
+    for prefix, size in _MODEL_CONTEXT_WINDOWS.items():
+        if model_id.startswith(prefix):
+            return size
+    return _DEFAULT_CONTEXT_WINDOW
 
 
 # ============== Compression Types ==============
@@ -120,6 +147,13 @@ class CompactConfig:
             raise ValueError('partial_max_rounds must be positive')
         if self.recent_transcript_entries < 0:
             raise ValueError('recent_transcript_entries must be non-negative')
+
+    @classmethod
+    def for_model(cls, model_id: str, **overrides) -> 'CompactConfig':
+        """Return a CompactConfig with max_context_tokens sized for *model_id*."""
+        window = context_window_for_model(model_id)
+        tokens = int(window * _COMPACT_FRACTION)
+        return cls(max_context_tokens=tokens, **overrides)
 
 
 # Backward compatibility aliases (must be after definitions)

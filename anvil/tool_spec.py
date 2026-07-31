@@ -9,6 +9,8 @@ from .infra.policies import Capability
 
 __all__ = ['ToolRisk', 'ValidationResult', 'ToolSpec', 'TOOL_DEFAULTS', 'ToolDef', 'build_tool']
 
+MAX_DESCRIPTION_CHARS = 800
+
 
 class ToolRisk(str, Enum):
     low = 'low'
@@ -54,9 +56,12 @@ class ToolSpec:
     is_destructive: bool = False
 
     def to_dict(self) -> dict[str, object]:
+        desc = self.description
+        if len(desc) > MAX_DESCRIPTION_CHARS:
+            desc = desc[:MAX_DESCRIPTION_CHARS - 3] + '...'
         return {
             'name': self.name,
-            'description': self.description,
+            'description': desc,
             'capabilities': [item.value for item in self.capabilities],
             'risk_level': self.risk_level.value,
             'requires_workspace': self.requires_workspace,

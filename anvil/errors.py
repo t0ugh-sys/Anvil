@@ -241,7 +241,7 @@ def validate_strategy(strategy: str) -> str:
 # Provider errors
 # ──────────────────────────────────────────────────────────────────────────────
 
-class ProviderError(AnvilError):
+class ProviderError(AnvilError, ValueError):
     """Raised when an LLM provider returns an error or is unreachable."""
     code = "PROVIDER_ERROR"
 

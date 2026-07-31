@@ -17,7 +17,11 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     'run_coding_agent',
+    'build_coding_step',
     'CodingAgentState',
+    'DeciderFn',
+    'SummarizerFn',
+    'ToolUseState',
 ]
 
 # Backward-compatible alias

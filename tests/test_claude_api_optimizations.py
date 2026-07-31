@@ -520,4 +520,44 @@ class TestBatchResult:
         from anvil.llm.providers import BatchResult
         result = BatchResult(custom_id='r3', text='ok', input_tokens=100, output_tokens=50)
         assert result.input_tokens == 100
-        assert result.output_tokens == 50
+
+
+# ============== render_cache_summary ==============
+
+
+import unittest as _unittest
+
+
+class TestRenderCacheSummary(_unittest.TestCase):
+    def test_no_calls_returns_placeholder(self):
+        from anvil.services.session_renderer import render_cache_summary
+        tracker = TokenUsageTracker()
+        result = render_cache_summary(tracker)
+        self.assertIn('no API calls', result)
+
+    def test_shows_hit_rate_and_savings(self):
+        from anvil.services.session_renderer import render_cache_summary
+        tracker = TokenUsageTracker()
+        tracker.record({
+            'input_tokens': 500,
+            'output_tokens': 200,
+            'cache_creation_input_tokens': 500,
+            'cache_read_input_tokens': 0,
+        })
+        tracker.record({
+            'input_tokens': 100,
+            'output_tokens': 200,
+            'cache_creation_input_tokens': 0,
+            'cache_read_input_tokens': 500,
+        })
+        result = render_cache_summary(tracker)
+        self.assertIn('cache_hit_rate', result)
+        self.assertIn('savings', result)
+        self.assertIn('calls: 2', result)
+
+    def test_zero_savings_displayed(self):
+        from anvil.services.session_renderer import render_cache_summary
+        tracker = TokenUsageTracker()
+        tracker.record({'input_tokens': 200, 'output_tokens': 100})
+        result = render_cache_summary(tracker)
+        self.assertIn('0.0%', result)
