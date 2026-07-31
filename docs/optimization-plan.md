@@ -504,7 +504,7 @@ examples/
 
 ---
 
-### 5.2 依赖安装体验
+### 5.2 依赖安装体验 ✅ 已实现
 
 **现状**：`dependencies = []`，用户需手动安装 `anthropic` 等 SDK（实际上 `providers.py` 用 raw urllib，不需要 SDK）。
 

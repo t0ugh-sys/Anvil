@@ -1,6 +1,6 @@
 [project]
 name = "Anvil"
-version = "0.1.0"
+version = "0.2.0"
 description = "Terminal-first coding agent runtime inspired by Claude Code."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,12 +22,15 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-browser = ["playwright>=1.40.0"]
-yaml = ["pyyaml>=6.0"]
-tui = ["textual>=0.86.2"]
-chat = ["rich>=13.0"]
-all = ["anvil[browser,yaml,tui,chat]"]
-dev = ["anvil[all]"]
+anthropic = ["anthropic>=0.40.0"]
+gemini    = ["google-generativeai>=0.8.0"]
+openai    = ["openai>=1.50.0"]
+browser   = ["playwright>=1.40.0"]
+yaml      = ["pyyaml>=6.0"]
+tui       = ["textual>=0.86.2"]
+chat      = ["rich>=13.0"]
+all       = ["anvil[anthropic,gemini,openai,browser,yaml,tui,chat]"]
+dev       = ["anvil[all]", "pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [project.scripts]
 anvil = "anvil.entrypoints.agent:main"
