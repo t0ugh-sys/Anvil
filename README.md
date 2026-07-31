@@ -34,6 +34,37 @@ python -m unittest discover -s tests -p "test_*.py" -v
 anvil
 ```
 
+## 5-Minute First Agent
+
+No API key needed — the example uses a mock LLM.
+
+```bash
+python examples/hello_agent/run.py
+```
+
+Expected output:
+
+```
+Running hello_agent...
+Step 1: Anvil is an interactive coding agent...
+Agent finished in 1 step(s).
+```
+
+To run a multi-agent example (Planner + Executor, still no key):
+
+```bash
+python examples/multi_agent_team/run.py
+```
+
+For real LLM calls, set your provider key and use the cost-aware example:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxx
+python examples/cost_aware_agent/run.py
+```
+
+See [examples/README.md](examples/README.md) for all runnable examples and [docs/architecture.md](docs/architecture.md) for a full data-flow diagram.
+
 ## Package Structure
 
 ```

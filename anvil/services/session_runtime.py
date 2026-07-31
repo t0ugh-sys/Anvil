@@ -18,6 +18,7 @@ from ..agent.loop import _looks_like_file_action
 from ..tools import builtin_tool_specs
 from .chat_runtime import InteractiveRuntime
 from .coding_runtime import build_coding_decider, build_coding_summarizer, load_skills_from_args
+from ..ui.tool_renderer import print_tool_call
 
 
 def build_interactive_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,8 @@ def build_interactive_parser() -> argparse.ArgumentParser:
     parser.add_argument('--max-context-tokens', type=int, default=50000)
     parser.add_argument('--micro-compact-keep', type=int, default=3)
     parser.add_argument('--recent-transcript-entries', type=int, default=8)
+    parser.add_argument('--tool-render', action='store_true', default=True, help='Render structured tool-call boxes')
+    parser.add_argument('--no-tool-render', action='store_false', dest='tool_render')
     parser.add_argument('--output', choices=['text', 'json'], default='text')
     parser.add_argument(
         '--skill',
@@ -173,6 +176,18 @@ def build_interactive_turn_runner(
         summarizer = build_coding_summarizer(turn_args)
         if runtime.observer is not None:
             runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
+        import os
+        use_color = os.isatty(1)
+        import shutil
+        term_width = shutil.get_terminal_size((80, 24)).columns
+        from ..ui.chrome import bounded_width
+        render_width = bounded_width(term_width)
+
+        on_tool_result = None
+        if getattr(turn_args, 'tool_render', True):
+            def on_tool_result(tool_name, args, result, elapsed_s):
+                print_tool_call(tool_name, args, result, elapsed_s, width=render_width, color=use_color)
+
         result = run_coding_agent(
             goal=runtime.goal,
             decider=decider,
@@ -186,6 +201,7 @@ def build_interactive_turn_runner(
             compression_config=runtime.compression_config,
             transcripts_dir=runtime.transcripts_dir,
             summarizer=summarizer,
+            on_tool_result=on_tool_result,
         )
         payload = runtime.finalize(result)
         output = _extract_interactive_output(payload)

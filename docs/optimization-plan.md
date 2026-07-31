@@ -59,7 +59,7 @@
 
 > 必须在下一个公开版本前修复，否则影响基本可用性或安全性。
 
-### 2.1 拆分 `providers.py`（73KB → 模块包）
+### 2.1 拆分 `providers.py`（73KB → 模块包）✅ 已实现
 
 **现状**：所有 Provider 逻辑堆在一个文件，包含 `CostTracker`、`BatchClient`、`TokenCounter`、`PromptCache`、流式工厂等。
 
@@ -86,7 +86,7 @@ src/anvil/llm/
 
 ---
 
-### 2.2 `CostTracker` 定价动态化
+### 2.2 `CostTracker` 定价动态化 ✅ 已实现
 
 **现状**：`_resolve_pricing()` 中价格硬编码，Anthropic 调价后静默计算错误。
 
@@ -110,7 +110,7 @@ class CostTracker:
 
 ---
 
-### 2.3 补充关键集成测试
+### 2.3 补充关键集成测试 ✅ 已实现
 
 **现状**：45+ 单元测试，零集成测试。
 
@@ -128,7 +128,7 @@ tests/integration/
 
 ---
 
-### 2.4 Windows CI 矩阵
+### 2.4 Windows CI 矩阵 ✅ 已实现
 
 **现状**：`.github/workflows/tests.yml` 仅跑 Linux runner。项目的主要开发和使用环境是 Windows 11，而 `asyncio` 在 Windows 上默认使用 `ProactorEventLoop`，行为与 Linux `SelectorEventLoop` 存在差异（特别是子进程、管道、信号处理）。
 
@@ -197,7 +197,7 @@ class AnthropicBatchClient:
 
 ---
 
-### 3.3 工具调用循环可观测性
+### 3.3 工具调用循环可观测性 ✅ 已实现
 
 **现状**：`ToolUseState` 内部状态不透明，调试困难。
 
@@ -267,7 +267,7 @@ class AnvilConfig:
 
 ---
 
-### 3.8 更新 CHANGELOG
+### 3.8 更新 CHANGELOG ✅ 已实现
 
 按 [Keep a Changelog](https://keepachangelog.com/) 格式，补录自 v0.1.0 以来所有功能：
 
@@ -277,7 +277,7 @@ class AnvilConfig:
 
 ---
 
-### 3.9 Rich Chat 三处低成本 Bug 修复
+### 3.9 Rich Chat 三处低成本 Bug 修复 ✅ 已实现
 
 **问题一：Markdown 渲染未启用**
 
@@ -330,7 +330,7 @@ if provider == 'anthropic':
 
 ---
 
-### 3.10 TUI 两处根本性问题修复
+### 3.10 TUI 两处根本性问题修复 ✅ 已实现
 
 **问题一：`Static` → `RichLog`（消息累积）**
 
@@ -481,7 +481,7 @@ def _print_streaming_response(console: Console, stream_iter, cfg: ChatConfig) ->
 
 ## 5. P3 — 开发者体验
 
-### 5.1 可运行示例
+### 5.1 可运行示例 ✅ 已实现
 
 在 `examples/` 下添加：
 
@@ -532,7 +532,7 @@ dev       = ["anvil[all]", "pytest>=8.0", "pytest-asyncio>=0.24"]
 
 ---
 
-### 5.4 文档补全
+### 5.4 文档补全 ✅ 已实现
 
 | 文档 | 现状 | 行动 |
 |------|------|------|
@@ -545,7 +545,7 @@ dev       = ["anvil[all]", "pytest>=8.0", "pytest-asyncio>=0.24"]
 
 ---
 
-### 5.5 主 Agent 工具调用结构化渲染
+### 5.5 主 Agent 工具调用结构化渲染 ✅ 已实现
 
 **现状**：`tool_use_loop.py` 执行工具时全靠裸 `print`，用户在终端看不到工具名称、参数摘要、耗时、成功/失败。体验远不如 Claude Code。
 

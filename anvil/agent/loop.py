@@ -355,6 +355,7 @@ def _dispatch_tool_calls(
     workspace_root: str = '',
     parallel: bool = True,
     result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> List[ToolResult]:
     """Dispatch tool calls, optionally executing independent tools in parallel.
 
@@ -417,6 +418,8 @@ def _dispatch_tool_calls(
         ready.append((idx, tool_call, None))  # None = needs execution
 
     # Phase 2: Execute tools (parallel or sequential)
+    elapsed_by_pos: dict[int, float] = {}
+
     def _exec_one(tc):
         if result_cache is not None:
             cached = result_cache.get(tc.name, dict(tc.arguments))
@@ -427,13 +430,19 @@ def _dispatch_tool_calls(
             result_cache.set(tc.name, dict(tc.arguments), result)
         return result
 
+    def _timed_exec(i):
+        t0 = _time.perf_counter()
+        result = _exec_one(ready[i][1])
+        elapsed_by_pos[i] = _time.perf_counter() - t0
+        return result
+
     exec_indices = [i for i, (idx, tc, pre) in enumerate(ready) if pre is None]
     results_by_pos: dict[int, ToolResult] = {}
 
     if parallel and len(exec_indices) > 1:
         with ThreadPoolExecutor(max_workers=min(len(exec_indices), 8)) as pool:
             futures = {
-                pool.submit(_exec_one, ready[i][1]): i
+                pool.submit(_timed_exec, i): i
                 for i in exec_indices
             }
             for future in as_completed(futures):
@@ -445,9 +454,10 @@ def _dispatch_tool_calls(
                     results_by_pos[pos] = ToolResult(
                         id=tc.id, ok=False, output='', error=f'parallel execution error: {exc}',
                     )
+                    elapsed_by_pos[pos] = 0.0
     else:
         for i in exec_indices:
-            results_by_pos[i] = _exec_one(ready[i][1])
+            results_by_pos[i] = _timed_exec(i)
 
     # Phase 3: Assemble results + PostToolUse hooks (sequential, per-tool)
     executed: List[ToolResult] = []
@@ -465,6 +475,15 @@ def _dispatch_tool_calls(
                 workspace_root=workspace_root,
             )
             hook_manager.run_event(HookEvent.PostToolUse, post_input)
+
+        # --- Tool render callback ---
+        if on_tool_result is not None:
+            on_tool_result(
+                tool_call.name,
+                dict(tool_call.arguments),
+                result,
+                elapsed_by_pos.get(i, 0.0),
+            )
 
         executed.append(result)
     return executed
@@ -659,6 +678,7 @@ def execute_tool_use_round(
     loop_detector: LoopDetector | None = None,
     security_monitor: SecurityMonitor | None = None,
     result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> StepResult[ToolUseState]:
     config = compression_config or CompactConfig()
     config.validate()
@@ -736,6 +756,7 @@ def execute_tool_use_round(
         session_id=str(tool_context.workspace_root),
         workspace_root=str(tool_context.workspace_root),
         result_cache=result_cache,
+        on_tool_result=on_tool_result,
     )
     # Emit tool_result events
     for result in executed:
@@ -836,6 +857,7 @@ def make_tool_use_step(
     summarizer: SummarizerFn | None = None,
     hook_manager: HookManager | None = None,
     loop_detector: LoopDetector | None = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> Callable[[StepContext[ToolUseState]], StepResult[ToolUseState]]:
     dispatch_map = build_tool_dispatch(skills=skills, extra_tools=extra_tools)
     tool_context = ToolContext(
@@ -859,6 +881,7 @@ def make_tool_use_step(
             summarizer=summarizer,
             hook_manager=hook_manager,
             loop_detector=loop_detector,
+            on_tool_result=on_tool_result,
             result_cache=_cache,
         )
 
