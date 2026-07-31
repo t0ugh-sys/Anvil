@@ -16,18 +16,34 @@ from ..ui.chrome import (
     ACCENT,
     ASSISTANT,
     BORDER,
+    BOTTOM_LEFT,
+    BOTTOM_RIGHT,
+    CIRCLE_EMPTY,
     DIM,
+    DIAMOND,
     DOT_SEPARATOR,
+    DOUBLE_HORIZONTAL,
+    DOUBLE_VERTICAL,
+    GEAR,
+    HORIZONTAL,
+    LIGHTNING,
+    MUTED,
     PROMPT_MARKER,
     PROMPT,
     RESPONSE_MARKER,
+    SPARKLE,
+    TOP_LEFT,
+    TOP_RIGHT,
+    VERTICAL,
     WORKING_MARKER,
     WORKING,
     bounded_width,
     box_lines,
     colorize,
     response_lines,
+    separator_line,
     truncate,
+    wrap_line,
 )
 
 __all__ = ['InteractiveRuntime']
@@ -238,21 +254,31 @@ class InteractiveRuntime:
         tool_count = len(tuple(self.tool_specs))
         model = self.model.strip() or 'configured model'
         permission_mode = self.permission_mode.strip() or 'balanced'
-        lines = [
-            f'{WORKING_MARKER} Welcome to Anvil',
-            '',
-            f'cwd: {state.workspace_root}',
-            f'session: {state.session_id}',
-            f'model: {model}',
-            f'permissions: {permission_mode}',
-            f'tools: {tool_count}',
-        ]
-        for index, line in enumerate(box_lines(lines, width=width, title='Anvil')):
-            style = BORDER if index in {0, len(lines) + 1} else DIM
-            self._write_line(self._style(line, style))
-        hint = f'  ? for shortcuts {DOT_SEPARATOR} /help {DOT_SEPARATOR} /status {DOT_SEPARATOR} /model {DOT_SEPARATOR} /panel {DOT_SEPARATOR} /exit'
+        color = self._color_enabled()
+
+        inner = max(2, width - 2)
+        content_width = max(1, width - 4)  # │ + space + content + space + │
+
+        def _row(text: str, style: str) -> str:
+            padded = truncate(text, content_width).ljust(content_width)
+            if color:
+                return (
+                    self._style(VERTICAL, BORDER)
+                    + ' ' + colorize(padded, style, enabled=True) + ' '
+                    + self._style(VERTICAL, BORDER)
+                )
+            return f'{VERTICAL} {padded} {VERTICAL}'
+
+        self._write_line(self._style(TOP_LEFT + HORIZONTAL * inner + TOP_RIGHT, BORDER))
+        self._write_line(_row(f'  {WORKING_MARKER} Anvil', ACCENT))
+        self._write_line(_row('', DIM))
+        self._write_line(_row(f'  {state.workspace_root}', ASSISTANT))
+        info = f'  {model}  {DOT_SEPARATOR}  {permission_mode}  {DOT_SEPARATOR}  {tool_count} tools'
+        self._write_line(_row(info, DIM))
+        self._write_line(self._style(BOTTOM_LEFT + HORIZONTAL * inner + BOTTOM_RIGHT, BORDER))
+
+        hint = f'  /help for help  {DOT_SEPARATOR}  /status  {DOT_SEPARATOR}  /exit'
         self._write_line(self._style(truncate(hint, width), DIM))
-        self._write_line(self._style(self._status_line(width), DIM))
         self._write_line('')
 
     def _model_command_output(self, argument: str) -> str:
@@ -288,13 +314,13 @@ class InteractiveRuntime:
         return self.stdin.readline()
 
     def _write_response(self, value: str, *, width: int) -> None:
-        for line in response_lines(value, width=width):
-            if line.lstrip().startswith(RESPONSE_MARKER):
-                marker, _, rest = line.partition(RESPONSE_MARKER)
-                rendered = marker + self._style(RESPONSE_MARKER, ACCENT) + self._style(rest, ASSISTANT)
-            else:
-                rendered = self._style(line, ASSISTANT)
-            self._write_line(rendered)
+        content = value.strip() or 'No response.'
+        content_width = max(1, width - 4)
+        for raw_line in content.splitlines() or ['']:
+            for wrapped in wrap_line(raw_line, content_width):
+                self._write_line(self._style('  ' + wrapped, ASSISTANT))
+        self._write_line('')
+        self._write_line(self._style('  ' + separator_line(width - 4), BORDER))
         self._write_line(self._style(self._status_line(width), DIM))
         self._write_line('')
 

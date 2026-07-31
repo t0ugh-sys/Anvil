@@ -24,8 +24,16 @@ Everything else layers on top: session runtime, permissions, commands, memory, t
 ## Quick Start
 
 ```bash
+# Create and activate a virtual environment
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
 # Install
-python -m pip install -e .
+pip install -e .
 
 # Test
 python -m unittest discover -s tests -p "test_*.py" -v
@@ -33,6 +41,9 @@ python -m unittest discover -s tests -p "test_*.py" -v
 # Run
 anvil
 ```
+
+> **Windows note**: if you skip the venv and install with `pip install --user`, the `anvil`
+> command lands in a Scripts directory that may not be on your PATH. Using a venv avoids this.
 
 ## 5-Minute First Agent
 
