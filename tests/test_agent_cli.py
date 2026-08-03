@@ -136,7 +136,10 @@ class AgentCliTests(unittest.TestCase):
         self.assertTrue(_should_use_plain_chat_fallback('Stopped without final output (reason: max_steps).'))
         self.assertTrue(_should_use_plain_chat_fallback('invalid agent step json. expected schema: {}'))
         self.assertTrue(_should_use_plain_chat_fallback('Run failed: invalid Anthropic response format'))
-        self.assertFalse(_should_use_plain_chat_fallback('done'))
+        self.assertTrue(_should_use_plain_chat_fallback('done'))
+        self.assertTrue(_should_use_plain_chat_fallback('ok'))
+        self.assertTrue(_should_use_plain_chat_fallback(''))
+        self.assertFalse(_should_use_plain_chat_fallback('I am Anvil, your coding assistant.'))
 
     def test_should_detect_action_requests_that_must_not_plain_chat_fallback(self) -> None:
         self.assertTrue(_looks_like_action_request('在D:\\workspace新增一个abc，并在abc新建一个.md文件'))

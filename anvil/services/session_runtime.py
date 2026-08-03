@@ -126,7 +126,8 @@ def _run_plain_chat_fallback(
     history_tail: list[str] | None = None,
 ) -> str:
     if str(getattr(base_args, 'provider', 'mock')) == 'mock':
-        return ''
+        model_name = str(getattr(base_args, 'model', 'mock') or 'mock')
+        return f'[{model_name}] I am Anvil, running in mock mode.'
     invoke = build_invoke_from_args(base_args, mode='chat')
     history = _format_chat_history(history_tail or [], current_user_text=user_text)
     prompt = (
@@ -139,8 +140,13 @@ def _run_plain_chat_fallback(
     return invoke(prompt).strip()
 
 
+_TRIVIAL_OUTPUTS = frozenset({'done', 'ok', 'yes', 'no', 'sure', 'complete', 'completed'})
+
+
 def _should_use_plain_chat_fallback(output: str) -> bool:
     text = output.strip()
+    if not text or text.lower() in _TRIVIAL_OUTPUTS:
+        return True
     if text.startswith('Stopped without final output'):
         return True
     provider_format_errors = (

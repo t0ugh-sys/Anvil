@@ -26,7 +26,7 @@ def _mock_invoke_factory(model: str, *, mode: str) -> InvokeFn:
                     'thought': f'[{model}] enough context',
                     'plan': [],
                     'tool_calls': [],
-                    'final': 'done',
+                    'final': f'[mock:{model}] Task complete.',
                 },
                 ensure_ascii=False,
             )
