@@ -41,6 +41,13 @@ Homepage = "https://github.com/t0ugh-sys/Anvil"
 Repository = "https://github.com/t0ugh-sys/Anvil"
 Issues = "https://github.com/t0ugh-sys/Anvil/issues"
 
+# Third-party skill plugins register here so Anvil's discover_plugins() can
+# find them automatically without any changes to Anvil's source code.
+# Example (in your own package's pyproject.toml):
+#
+# [project.entry-points."anvil.skills"]
+# my_skill = "my_package.skill:MySkill"
+
 [tool.setuptools]
 package-dir = { "" = "." }
 

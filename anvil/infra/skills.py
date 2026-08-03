@@ -19,13 +19,40 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, List, Protocol, runtime_checkable
 
 from ..agent.protocol import ToolResult
 
 
 # Skill definition
-__all__ = ['Skill', 'SkillLoader', 'get_skill', 'list_skills', 'skill_metadata', 'load_skill', 'unload_skill', 'build_skill_tools', 'get_prompt_context', 'list_loaded_skills', 'load_skills_from_args', 'discover_local_skill_names']
+__all__ = [
+    'Skill', 'SkillBase', 'SkillLoader',
+    'get_skill', 'list_skills', 'skill_metadata',
+    'load_skill', 'unload_skill', 'build_skill_tools',
+    'get_prompt_context', 'list_loaded_skills',
+    'load_skills_from_args', 'discover_local_skill_names',
+    'discover_plugins',
+]
+
+
+@runtime_checkable
+class SkillBase(Protocol):
+    """Formal contract for third-party plugin skills.
+
+    Third-party packages register implementations via pyproject.toml:
+
+        [project.entry-points."anvil.skills"]
+        my_skill = "my_package.skill:MySkill"
+    """
+
+    name: str
+    description: str
+
+    def get_tools(self) -> dict[str, Callable]:
+        ...
+
+    def on_activate(self, ctx: dict[str, Any]) -> None:
+        ...
 
 
 
@@ -65,6 +92,28 @@ _SKILL_REGISTRY: dict[str, type[Skill]] = {}
 def register_skill(skill_class: type[Skill]) -> None:
     """Register a skill class."""
     _SKILL_REGISTRY[skill_class.name] = skill_class
+
+
+def discover_plugins() -> dict[str, type]:
+    """Return {name: class} for all skills registered via entry points.
+
+    Third-party packages declare plugins in pyproject.toml:
+
+        [project.entry-points."anvil.skills"]
+        my_skill = "my_package.skill:MySkill"
+
+    Malformed or unloadable entry points are silently skipped.
+    """
+    from importlib.metadata import entry_points
+    found: dict[str, type] = {}
+    for ep in entry_points(group='anvil.skills'):
+        try:
+            cls = ep.load()
+            if isinstance(cls, type) and isinstance(cls(), SkillBase):
+                found[ep.name] = cls
+        except Exception:
+            pass
+    return found
 
 
 def _skills_docs_root() -> Path:
@@ -279,15 +328,26 @@ class SkillLoader:
         return self._load_external(name)
     
     def _load_external(self, name: str) -> bool:
-        """Try to load an external skill."""
-        # Validate skill name to prevent arbitrary module loading
+        """Try to load an external skill — entry points first, then anvil_skills.*."""
         if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
             raise ValueError(f'Invalid skill name: {name!r}')
+
+        # 1. Try entry-point registered plugins
         try:
-            # Try importing as a module
+            from importlib.metadata import entry_points
+            eps = {ep.name: ep for ep in entry_points(group='anvil.skills')}
+            if name in eps:
+                cls = eps[name].load()
+                skill = cls() if isinstance(cls, type) else cls
+                self._loaded_skills[name] = skill
+                return True
+        except Exception:
+            pass
+
+        # 2. Fall back to anvil_skills namespace package
+        try:
             import importlib
             module = importlib.import_module(f'anvil_skills.{name}')
-            
             if hasattr(module, 'Skill'):
                 skill = module.Skill()
                 self._loaded_skills[name] = skill
