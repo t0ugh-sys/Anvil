@@ -647,7 +647,25 @@ class SkillBase(Protocol):
 
 ---
 
-### 6.5 语义记忆（Memory 模块升级）
+### 6.6 Bug Fix：CLI mock 模式回复 "done" ✅ 已修复
+
+**现象**：`anvil` CLI（mock provider）对对话类问题（如 "你是谁"）回复 `done` 而非有效答案。
+
+**根因**：
+1. `anvil/llm/mock.py`：coding 模式第2次调用固定返回 `final: 'done'`
+2. `anvil/services/session_runtime.py`：`_run_plain_chat_fallback` 对 mock provider 直接返回 `''`，fallback 完全禁用
+3. `_should_use_plain_chat_fallback` 不识别 `'done'` 为需要 fallback 的平凡回复
+
+**修复**：
+- `_should_use_plain_chat_fallback` 新增 `_TRIVIAL_OUTPUTS` 集合检测（`'done'`、`'ok'` 等短词）
+- `_run_plain_chat_fallback` mock 路径返回 `[{model}] I am Anvil, running in mock mode.`
+- `mock.py` coding 模式 `final` 改为 `[mock:{model}] Task complete.`（避免裸 `'done'`）
+
+commit `9a39b8b`。
+
+---
+
+### 6.5 语义记忆（Memory 模块升级）✅ 已实现
 
 **现状**：`memory/` 使用 JSONL 平铺存储，检索依赖全量扫描 + 关键词匹配，对长期积累的上下文利用率低。
 
@@ -674,6 +692,8 @@ class VectorMemoryStore:
 - **项目记忆**：与 git repo 绑定，`.anvil/memory/` 可提交到版本控制共享给团队
 
 **预期收益**：跨会话的知识复用，减少重复解释项目背景，长期任务续接更顺畅。
+
+`anvil/memory/vector_store.py` 实现零外部依赖的语义检索：纯 Python 余弦相似度 KNN，embedding 走 Anthropic API 或本地占位 hash，落盘 `.anvil/memory/vectors.db`（SQLite）。commit `97d04f3`。
 
 ---
 
