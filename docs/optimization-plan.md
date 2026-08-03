@@ -594,7 +594,7 @@ def render_tool_call(tool_name: str, args: dict, result, elapsed_s: float, *, co
 
 ## 6. P4 — 长期架构演进
 
-### 6.1 Plugin 系统
+### 6.1 Plugin 系统 ✅ 已实现
 
 将 `skills/` 中的技能合约演进为正式插件系统：
 
@@ -611,22 +611,31 @@ class SkillBase(Protocol):
     def on_activate(self, ctx: SessionContext) -> None: ...
 ```
 
----
-
-### 6.2 协议层 (`protocols/`) 标准化
-
-当前 `protocols/` 目录内容未记录。建议：
-- 梳理现有内容，若是 Agent-to-Agent 通信协议，基于 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 标准对齐
-- 发布 `anvil-protocol` 规范文档，供第三方 Agent 接入
+`discover_plugins()` 使用 `importlib.metadata.entry_points(group='anvil.skills')` 发现已安装的第三方技能，`SkillLoader._load_external()` 优先尝试 entry points，再 fallback 到 `anvil_skills.*` 命名空间包。16 个测试见 `tests/test_plugin_system.py`。commit `220671a`。
 
 ---
 
-### 6.3 可观测性平台集成
+### 6.2 协议层 (`protocols/`) 标准化 ✅ 已实现
 
-为生产部署场景提供：
-- OpenTelemetry 埋点（traces for tool calls, spans for LLM invocations）
-- Prometheus metrics endpoint（`/metrics`）
-- 结构化 JSON 日志（替代当前混合 `print` + `logging`）
+`anvil/protocols/mcp.py` 实现 MCP (Model Context Protocol) 兼容层：
+
+- 内容类型：`MCPTextContent`、`MCPImageContent`
+- 工具描述：`MCPTool`（含 JSON Schema `inputSchema`）、`MCPInputSchema`
+- 调用/结果：`MCPToolCallParams`、`MCPCallToolResult`
+- 双向转换：`anvil_tool_def_to_mcp`、`mcp_result_from_anvil`、`parse_mcp_tool_call`、`tool_list_to_mcp`
+
+第三方 MCP 客户端可直接列举并调用 Anvil 工具，无需了解内部格式。29 个测试见 `tests/test_mcp_protocol.py`。commit `3651f90`。
+
+---
+
+### 6.3 可观测性平台集成 ✅ 已实现
+
+`anvil/observability/` 模块提供：
+
+- **tracing.py**：零硬依赖 OTel 包装器，OTel 未安装时自动降级为 `NoOpTracer`；`@trace_tool_call` / `@trace_llm_invoke` 装饰器支持同步和异步函数，记录 `tool.name`、`tool.ok`、`elapsed_ms` 等 span 属性
+- **logging.py**：纯 stdlib 结构化日志，`JSONFormatter` 输出 NDJSON，`StructuredLogger` 支持关键字参数字段，`configure_json_logging()` 幂等安装
+
+33 个测试见 `tests/test_observability.py`。commit `faf026d`。
 
 ---
 
