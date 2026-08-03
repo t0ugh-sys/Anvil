@@ -180,6 +180,59 @@ class HybridTokenCounterTests(unittest.TestCase):
         self.assertGreater(result, 150)
         self.assertLess(result, 300)
 
+    def test_should_share_calibration_across_instances(self) -> None:
+        HybridTokenCounter._model_calibration.clear()
+        counter1 = HybridTokenCounter(model='claude-sonnet-5')
+        counter1.update_from_response(
+            {'usage': {'input_tokens': 100, 'output_tokens': 20}},
+            message_count=1,
+            total_chars=500,
+        )
+        # New instance for same model should pick up cached ratio
+        counter2 = HybridTokenCounter(model='claude-sonnet-5')
+        messages = [{'role': 'user', 'content': 'x' * 500}]
+        result = counter2.estimate_messages(messages)
+        # ratio = 500/100 = 5 chars/token → 500/5 = 100 tokens
+        self.assertEqual(result, 100)
+
+    def test_different_models_use_independent_calibration(self) -> None:
+        HybridTokenCounter._model_calibration.clear()
+        counter_a = HybridTokenCounter(model='model-a')
+        counter_a.update_from_response(
+            {'usage': {'input_tokens': 50, 'output_tokens': 0}},
+            message_count=1,
+            total_chars=500,  # 10 chars/token
+        )
+        counter_b = HybridTokenCounter(model='model-b')
+        counter_b.update_from_response(
+            {'usage': {'input_tokens': 250, 'output_tokens': 0}},
+            message_count=1,
+            total_chars=500,  # 2 chars/token
+        )
+        msgs = [{'role': 'user', 'content': 'x' * 200}]
+        self.assertEqual(HybridTokenCounter(model='model-a').estimate_messages(msgs), 20)
+        self.assertEqual(HybridTokenCounter(model='model-b').estimate_messages(msgs), 100)
+
+
+class IsCjkBisectTests(unittest.TestCase):
+    def test_cjk_character_detected(self) -> None:
+        from anvil.token_estimation import _is_cjk
+        self.assertTrue(_is_cjk('中'))
+        self.assertTrue(_is_cjk('あ'))
+        self.assertTrue(_is_cjk('가'))
+
+    def test_ascii_not_cjk(self) -> None:
+        from anvil.token_estimation import _is_cjk
+        self.assertFalse(_is_cjk('A'))
+        self.assertFalse(_is_cjk('z'))
+        self.assertFalse(_is_cjk('5'))
+
+    def test_cjk_count_affects_estimate(self) -> None:
+        cjk_tokens = estimate_text_tokens('中文')
+        ascii_tokens = estimate_text_tokens('ab')
+        # CJK should produce more tokens per char than ASCII
+        self.assertGreater(cjk_tokens, ascii_tokens)
+
 
 if __name__ == '__main__':
     unittest.main()

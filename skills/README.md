@@ -14,9 +14,10 @@ scope, expectations, and safe operating boundaries.
 
 ## Loading Skills
 
+Skills are loaded via the interactive runtime's `--skill` flag, then used from within the chat session:
+
 ```bash
-python -m anvil.agent_cli skills
-python -m anvil.agent_cli code --goal "inspect the repo" --workspace . --skill files --skill memory --provider mock --model mock-v3
+anvil --skill files --skill memory --provider mock --model mock-v3
 ```
 
 ## Skill Notes

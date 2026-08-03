@@ -21,9 +21,10 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace
+    entrypoint: ["/bin/sh", "-c"]
     command: >
-      python -m anvil.agent_cli code
-      --goal "inspect README then finish"
+      echo "inspect README then finish" |
+      python -m anvil.entrypoints.agent
       --workspace .
       --provider openai_compatible
       --model gpt-4o-mini
@@ -38,12 +39,13 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace
+    entrypoint: ["/bin/sh", "-c"]
     command: >
-      python -m anvil.agent_cli code
-      --goal "inspect README then finish"
+      echo "inspect README then finish" |
+      python -m anvil.entrypoints.agent
       --workspace .
       --provider anthropic
-      --model claude-3-haiku-20240307
+      --model claude-haiku-4-5
 
   # Example: Run with npm
   anvil-npm:
@@ -54,5 +56,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - PYTHONUNBUFFERED=1
     working_dir: /workspace
-    entrypoint: node
-    command: ["bin/anvil.js", "code", "--goal", "inspect README then finish", "--workspace", ".", "--provider", "openai_compatible", "--model", "gpt-4o-mini"]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      echo "inspect README then finish" | node bin/anvil.js
+      --workspace . --provider openai_compatible --model gpt-4o-mini

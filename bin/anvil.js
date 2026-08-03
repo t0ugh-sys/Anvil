@@ -130,7 +130,7 @@ function ensureRuntime() {
 
 function runAnvilCLI(userArgs) {
   const py = venvPythonPath();
-  const args = ['-m', 'anvil.agent_cli', ...userArgs];
+  const args = ['-m', 'anvil.entrypoints.agent', ...userArgs];
   const child = cp.spawn(py, args, { stdio: 'inherit' });
   child.on('exit', (code) => process.exit(code === null ? 1 : code));
 }

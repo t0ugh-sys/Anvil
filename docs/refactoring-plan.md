@@ -135,8 +135,7 @@ Anvil/
 │   ├── token_estimation.py   # Token计数
 │   ├── todo.py               # TODO追踪
 │   ├── utils.py              # 公共工具函数
-│   ├── api.py                # API端点
-│   └── cli.py                # 统一CLI (删除 agent_cli.py)
+│   └── api.py                # API端点
 ├── tests/
 │   ├── _bootstrap.py         # 保持
 │   ├── conftest.py           # 新：pytest fixtures
@@ -284,7 +283,7 @@ Anvil/
 | `compression.py` | `compression/` (拆分为4个文件) | 拆分 |
 | `ops/github_tools.py` | `ops/github/` (拆分为3个文件) | 拆分 |
 | `worktree_manager.py` | `ops/worktree.py` | 移动 |
-| `agent_cli.py` | 合并到 `cli.py` | 合并，删除 |
+| `agent_cli.py` | 已删除（与 `cli.py` 一同移除） | 删除 |
 | `runtime.py` | 分散到 `runtime/` 各模块 | 拆分分散 |
 | `coding_agent.py` | `runtime/coding.py` | 合并 |
 
@@ -292,7 +291,7 @@ Anvil/
 
 | 文件 | 原因 |
 |------|------|
-| `src/anvil/agent_cli.py` | 合并到 `anvil/cli.py` |
+| `src/anvil/agent_cli.py` | 已删除（与 `cli.py` 一同移除） |
 | `src/anvil/run_schema.py` | 合并到 `anvil/config/schema.py` |
 | `src/anvil/coding_agent.py` | 合并到 `anvil/runtime/coding.py` |
 | `src/anvil/services/session_runtime.py` | 合并到 `anvil/runtime/session.py` |
@@ -381,7 +380,7 @@ Anvil/
 - [ ] 拆分 `team_runtime.py` → `runtime/team.py`（清理）
 - [ ] 拆分 `ops/github_tools.py` → `ops/github/` 3个文件
 - [ ] 合并 `session.py` + `services/session_runtime.py`
-- [ ] 合并 `agent_cli.py` → `cli.py`
+- [ ] 删除 `cli.py` 和 `agent_cli.py`（已在"Delete CLI"重构中完成）
 - [ ] 运行测试，确认全通过
 
 ### Phase 3 — tests/ 重组 (预计 半天)

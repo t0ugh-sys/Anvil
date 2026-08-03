@@ -1,7 +1,7 @@
 """Backward-compatibility shim — re-exports everything from the llm subpackage."""
 from __future__ import annotations
 
-from ._types import InvokeFn, ChatInvokeFn, DEFAULT_RETRY_HTTP_CODES
+from ._types import AsyncInvokeFn, InvokeFn, ChatInvokeFn, DEFAULT_RETRY_HTTP_CODES
 from ._http import ProviderHttpError, _http_post_json, _request_with_retry, _with_model_fallback
 from .usage import TokenUsageRecord, TokenUsageTracker, CostTracker
 from .cache import PromptCache
@@ -30,6 +30,7 @@ from .anthropic import (
     _split_system_user,
     _anthropic_invoke_factory,
     anthropic_invoke_factory,
+    anthropic_async_invoke_factory,
     AnthropicChatResponse,
     anthropic_chat_invoke_factory,
     anthropic_stream_invoke_factory,
@@ -42,6 +43,7 @@ from .anthropic import (
 
 __all__ = [
     'InvokeFn',
+    'AsyncInvokeFn',
     'ChatInvokeFn',
     'DEFAULT_RETRY_HTTP_CODES',
     'ProviderHttpError',
@@ -60,6 +62,7 @@ __all__ = [
     'get_provider',
     '_anthropic_invoke_factory',
     'anthropic_invoke_factory',
+    'anthropic_async_invoke_factory',
     'AnthropicChatResponse',
     'anthropic_chat_invoke_factory',
     'anthropic_stream_invoke_factory',

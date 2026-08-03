@@ -15,7 +15,9 @@ from anvil.infra.skills import SkillLoader
 from anvil.compression import CompactConfig, TranscriptEntry
 from anvil.runtime.task_graph import Task, TaskGraph
 from anvil.runtime.task_store import TaskStore
-from anvil.agent.loop import ToolUseState, make_tool_use_step
+from anvil.agent.loop import ToolUseState, make_tool_use_step, _ReadOnlyToolCache
+from anvil.tool_spec import ToolSpec, MAX_DESCRIPTION_CHARS
+from anvil.agent.protocol import ToolResult
 from anvil.todo import TodoItem
 
 
@@ -609,3 +611,147 @@ class ToolUseLoopTests(unittest.TestCase):
             self.fail('background notification was not delivered in time')
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_emit_tool_call_and_tool_result_loop_events(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return (
+                    '{"thought":"inspect","plan":["read"],'
+                    '"tool_calls":[{"id":"call_e1","name":"read_file","arguments":{"path":"README.md"}}],'
+                    '"final":"later"}'
+                )
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            context = StepContext(
+                goal='x',
+                state=ToolUseState(),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+            result = step(context)
+
+            events = result.state.loop_events
+            types = [e['type'] for e in events]
+            self.assertIn('tool_call', types)
+            self.assertIn('tool_result', types)
+            call_evt = next(e for e in events if e['type'] == 'tool_call')
+            self.assertEqual(call_evt['data']['name'], 'read_file')
+            self.assertEqual(call_evt['data']['id'], 'call_e1')
+            result_evt = next(e for e in events if e['type'] == 'tool_result')
+            self.assertEqual(result_evt['data']['id'], 'call_e1')
+            self.assertTrue(result_evt['data']['ok'])
+            for evt in events:
+                self.assertIsInstance(evt['timestamp'], float)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_accumulate_loop_events_across_rounds(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / 'README.md').write_text('hello', encoding='utf-8')
+        try:
+            call_count = {'n': 0}
+
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                call_count['n'] += 1
+                if call_count['n'] == 1:
+                    return (
+                        '{"thought":"r1","plan":[],'
+                        '"tool_calls":[{"id":"call_r1","name":"read_file","arguments":{"path":"README.md"}}],'
+                        '"final":"later"}'
+                    )
+                return '{"thought":"done","plan":[],"tool_calls":[],"final":null}'
+
+            step = make_tool_use_step(decider=decider, workspace_root=tmp_dir)
+            ctx1 = StepContext(
+                goal='x', state=ToolUseState(), step_index=0,
+                started_at_s=0.0, now_s=0.0, history=tuple(),
+            )
+            result1 = step(ctx1)
+            ctx2 = StepContext(
+                goal='x', state=result1.state, step_index=1,
+                started_at_s=0.0, now_s=0.0, history=tuple(),
+            )
+            result2 = step(ctx2)
+
+            events = result2.state.loop_events
+            self.assertEqual(len(events), 2, 'round 1: tool_call+tool_result; round 2: no tool calls')
+            self.assertEqual(events[0]['type'], 'tool_call')
+            self.assertEqual(events[1]['type'], 'tool_result')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_emit_compaction_loop_event_on_auto_compact(self) -> None:
+
+        tmp_dir = Path('tests/.tmp') / f'tool-loop-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            def decider(goal, history, tool_results, state_summary, last_steps) -> str:
+                return '{"thought":"done","plan":[],"tool_calls":[],"final":null}'
+
+            step = make_tool_use_step(
+                decider=decider,
+                workspace_root=tmp_dir,
+                compression_config=CompactConfig(max_context_tokens=5),
+                summarizer=lambda goal, previous_summary, transcript: 'compacted',
+            )
+            context = StepContext(
+                goal='x',
+                state=ToolUseState(
+                    transcript=(TranscriptEntry(kind='thought', content='a' * 200),),
+                ),
+                step_index=0,
+                started_at_s=0.0,
+                now_s=0.0,
+                history=tuple(),
+            )
+            result = step(context)
+
+            self.assertEqual(result.state.compaction_count, 1)
+            compaction_events = [e for e in result.state.loop_events if e['type'] == 'compaction']
+            self.assertEqual(len(compaction_events), 1)
+            evt = compaction_events[0]
+            self.assertEqual(evt['data']['compaction_count'], 1)
+            self.assertIn('auto:', evt['data']['reason'])
+            self.assertIsInstance(evt['timestamp'], float)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_tool_spec_to_dict_truncates_long_description(self) -> None:
+        long_desc = 'x' * (MAX_DESCRIPTION_CHARS + 100)
+        spec = ToolSpec(name='my_tool', description=long_desc)
+        result = spec.to_dict()
+        self.assertLessEqual(len(result['description']), MAX_DESCRIPTION_CHARS)
+        self.assertTrue(result['description'].endswith('...'))
+
+    def test_tool_spec_to_dict_keeps_short_description_intact(self) -> None:
+        short_desc = 'short description'
+        spec = ToolSpec(name='my_tool', description=short_desc)
+        result = spec.to_dict()
+        self.assertEqual(result['description'], short_desc)
+
+    def test_readonly_tool_cache_returns_cached_result_on_second_call(self) -> None:
+        cache = _ReadOnlyToolCache(ttl_s=30.0)
+        first = ToolResult(id='c1', ok=True, output='file content', error=None)
+        cache.set('read_file', {'path': 'README.md'}, first)
+        hit = cache.get('read_file', {'path': 'README.md'})
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.output, 'file content')
+
+    def test_readonly_tool_cache_ignores_non_readonly_tools(self) -> None:
+        cache = _ReadOnlyToolCache(ttl_s=30.0)
+        result = ToolResult(id='c2', ok=True, output='wrote', error=None)
+        cache.set('write_file', {'path': 'f.txt', 'content': 'hi'}, result)
+        self.assertIsNone(cache.get('write_file', {'path': 'f.txt', 'content': 'hi'}))
+
+    def test_readonly_tool_cache_expires_after_ttl(self) -> None:
+        cache = _ReadOnlyToolCache(ttl_s=0.01)
+        result = ToolResult(id='c3', ok=True, output='data', error=None)
+        cache.set('read_file', {'path': 'a.txt'}, result)
+        time.sleep(0.05)
+        self.assertIsNone(cache.get('read_file', {'path': 'a.txt'}))

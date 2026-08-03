@@ -4,12 +4,16 @@ This directory contains various examples for Anvil.
 
 ## Quick Examples
 
-| File | Description |
-|------|-------------|
-| `json_loop_stub_demo.py` | Basic JSON loop with mock responses |
-| `logging_demo.py` | Using the logging system |
-| `prompts_demo.py` | Using prompt templates |
-| `browser_tools.py` | Browser automation with Playwright |
+| Directory / File | Description |
+|------------------|-------------|
+| [hello_agent/](hello_agent/) | Minimal agent answering a question (mock LLM) |
+| [batch_processing/](batch_processing/) | Batch code review via Anthropic Batch API |
+| [multi_agent_team/](multi_agent_team/) | Planner + Executor two-agent pipeline |
+| [cost_aware_agent/](cost_aware_agent/) | Hard step/time budget with StopConfig |
+| `basic/json_loop_stub_demo.py` | Raw JSON loop with mock responses |
+| `llm/logging_demo.py` | Using the logging system |
+| `llm/prompts_demo.py` | Using prompt templates |
+| `advanced/browser_tools.py` | Browser automation with Playwright |
 
 ## Configuration Examples
 
@@ -47,12 +51,12 @@ pip install -e .
 # Run JSON loop demo
 python examples/json_loop_stub_demo.py
 
-# Run with config
-python -m anvil.agent_cli code --config config.yaml --goal "your goal"
+# Launch interactive session
+anvil
 
 # Use docker
 docker build -t anvil .
-docker run anvil --goal "your goal"
+docker run -it anvil
 ```
 
 ## Advanced Usage

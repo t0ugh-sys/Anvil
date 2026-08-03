@@ -1,4 +1,3 @@
-from .doctor import format_doctor_report, run_provider_doctor
 from .git_tools import (
     GitOptions,
     git_branch_list_tool,
@@ -27,8 +26,6 @@ from .github_tools import (
 )
 
 __all__ = [
-    'format_doctor_report',
-    'run_provider_doctor',
     'GitOptions',
     'git_branch_list_tool',
     'git_checkout_tool',

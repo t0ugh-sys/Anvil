@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import os
+from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import _bootstrap  # noqa: F401
 
 import unittest
 from unittest.mock import patch, MagicMock
 
-from anvil.llm.anthropic.batch import BatchRequest, BatchResult, AnthropicBatchClient
+from anvil.llm.anthropic.batch import BatchRequest, BatchResult, BatchJobStore, AnthropicBatchClient
 
 
 class TestBatchDataclasses(unittest.TestCase):
@@ -72,6 +74,76 @@ class TestBatchClientWorkflow(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertTrue(results[0].ok)
             self.assertEqual(results[0].text, 'answer1')
+
+
+class TestBatchClientWithStore(unittest.TestCase):
+    def _make_client_with_store(self) -> tuple[AnthropicBatchClient, BatchJobStore, Path]:
+        tmp_dir = Path('tests/.tmp') / 'batch-client-store'
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        store = BatchJobStore(tmp_dir / 'batch_jobs.db')
+        client = AnthropicBatchClient(api_key='test-key', model='claude-sonnet-5', store=store)
+        return client, store, tmp_dir
+
+    def test_submit_persists_job_to_store(self):
+        client, store, tmp_dir = self._make_client_with_store()
+        try:
+            with patch.object(client, '_post', return_value={'id': 'batch_abc123'}):
+                batch_id = client.submit([BatchRequest(custom_id='r1', prompt='hello')], metadata={'run': 1})
+            pending = store.load_pending()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].batch_id, batch_id)
+            self.assertEqual(pending[0].metadata, {'run': 1})
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_get_results_marks_job_done_in_store(self):
+        client, store, tmp_dir = self._make_client_with_store()
+        try:
+            with patch.object(client, '_post', return_value={'id': 'batch_abc'}):
+                batch_id = client.submit([BatchRequest(custom_id='r1', prompt='hello')])
+            status_ended = {
+                'id': batch_id,
+                'processing_status': 'ended',
+                'results_url': f'/v1/messages/batches/{batch_id}/results',
+            }
+            jsonl_body = (
+                '{"custom_id": "r1", "type": "succeeded", '
+                '"result": {"message": {"content": [{"type": "text", "text": "answer1"}], '
+                '"usage": {"input_tokens": 10, "output_tokens": 5}}}}'
+            )
+            with patch.object(client, '_get', return_value=status_ended), \
+                 patch.object(client, '_get_raw', return_value=jsonl_body):
+                client.get_results(batch_id)
+            self.assertEqual(store.load_pending(), [])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_cancel_marks_job_cancelled_in_store(self):
+        client, store, tmp_dir = self._make_client_with_store()
+        try:
+            with patch.object(client, '_post', return_value={'id': 'batch_abc'}):
+                batch_id = client.submit([BatchRequest(custom_id='r1', prompt='hello')])
+            with patch.object(client, '_post', return_value={'status': 'cancelled'}):
+                client.cancel(batch_id)
+            self.assertEqual(store.load_pending(), [])
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_resume_pending_jobs_delegates_to_store(self):
+        client, store, tmp_dir = self._make_client_with_store()
+        try:
+            with patch.object(client, '_post', return_value={'id': 'batch_abc'}):
+                client.submit([BatchRequest(custom_id='r1', prompt='hello')])
+            resumed = client.resume_pending_jobs()
+            self.assertEqual(len(resumed), 1)
+            self.assertEqual(resumed[0].batch_id, 'batch_abc')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_resume_pending_jobs_returns_empty_without_store(self):
+        client = AnthropicBatchClient(api_key='test-key', model='claude-sonnet-5')
+        self.assertEqual(client.resume_pending_jobs(), [])
 
 
 if __name__ == '__main__':

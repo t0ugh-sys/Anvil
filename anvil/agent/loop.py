@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time as _time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Tuple, TypedDict
 
 from anvil.agent.protocol import ToolResult, parse_agent_step, render_agent_step_schema
 from anvil.agent.background import BackgroundCommandRunner
@@ -33,6 +35,7 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     'ToolUseState',
+    'LoopEvent',
     'DeciderFn',
     'SummarizerFn',
     'build_tool_dispatch',
@@ -41,6 +44,47 @@ __all__ = [
     '_build_reflection',
     '_looks_like_file_action',
 ]
+
+_READ_ONLY_TOOLS = frozenset({'read_file', 'search'})
+_TOOL_CACHE_TTL_S = 30.0
+
+
+class _ReadOnlyToolCache:
+    """Thread-safe TTL cache for read-only tool results keyed by (tool_name, args_hash)."""
+
+    def __init__(self, ttl_s: float = _TOOL_CACHE_TTL_S) -> None:
+        self._ttl = ttl_s
+        self._store: Dict[str, tuple] = {}  # key -> (ToolResult, timestamp)
+
+    def _key(self, tool_name: str, arguments: dict) -> str:
+        canonical = json.dumps(arguments, sort_keys=True, ensure_ascii=False)
+        digest = hashlib.md5(f'{tool_name}:{canonical}'.encode()).hexdigest()[:12]
+        return digest
+
+    def get(self, tool_name: str, arguments: dict) -> 'ToolResult | None':
+        if tool_name not in _READ_ONLY_TOOLS:
+            return None
+        key = self._key(tool_name, arguments)
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        result, ts = entry
+        if _time.time() - ts > self._ttl:
+            del self._store[key]
+            return None
+        return result
+
+    def set(self, tool_name: str, arguments: dict, result: 'ToolResult') -> None:
+        if tool_name not in _READ_ONLY_TOOLS or not result.ok:
+            return
+        key = self._key(tool_name, arguments)
+        self._store[key] = (result, _time.time())
+
+
+class LoopEvent(TypedDict):
+    type: Literal['tool_call', 'tool_result', 'compaction', 'cost_update', 'error']
+    timestamp: float
+    data: dict
 
 
 DeciderFn = Callable[[str, Tuple[str, ...], Tuple[ToolResult, ...], Dict[str, object], Tuple[str, ...]], str]
@@ -59,6 +103,7 @@ class ToolUseState:
     archived_transcripts: Tuple[str, ...] = tuple()
     last_compaction_reason: str = ''
     background_notifications: Tuple[ToolResult, ...] = tuple()
+    loop_events: Tuple[LoopEvent, ...] = tuple()
 
     def replace(self, **kwargs: object) -> 'ToolUseState':
         """Create a new state with only the specified fields changed.
@@ -309,6 +354,8 @@ def _dispatch_tool_calls(
     session_id: str = '',
     workspace_root: str = '',
     parallel: bool = True,
+    result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> List[ToolResult]:
     """Dispatch tool calls, optionally executing independent tools in parallel.
 
@@ -371,8 +418,23 @@ def _dispatch_tool_calls(
         ready.append((idx, tool_call, None))  # None = needs execution
 
     # Phase 2: Execute tools (parallel or sequential)
+    elapsed_by_pos: dict[int, float] = {}
+
     def _exec_one(tc):
-        return execute_tool_call(tool_context, tc, dispatch_map)
+        if result_cache is not None:
+            cached = result_cache.get(tc.name, dict(tc.arguments))
+            if cached is not None:
+                return ToolResult(id=tc.id, ok=cached.ok, output=cached.output, error=cached.error)
+        result = execute_tool_call(tool_context, tc, dispatch_map)
+        if result_cache is not None:
+            result_cache.set(tc.name, dict(tc.arguments), result)
+        return result
+
+    def _timed_exec(i):
+        t0 = _time.perf_counter()
+        result = _exec_one(ready[i][1])
+        elapsed_by_pos[i] = _time.perf_counter() - t0
+        return result
 
     exec_indices = [i for i, (idx, tc, pre) in enumerate(ready) if pre is None]
     results_by_pos: dict[int, ToolResult] = {}
@@ -380,7 +442,7 @@ def _dispatch_tool_calls(
     if parallel and len(exec_indices) > 1:
         with ThreadPoolExecutor(max_workers=min(len(exec_indices), 8)) as pool:
             futures = {
-                pool.submit(_exec_one, ready[i][1]): i
+                pool.submit(_timed_exec, i): i
                 for i in exec_indices
             }
             for future in as_completed(futures):
@@ -392,9 +454,10 @@ def _dispatch_tool_calls(
                     results_by_pos[pos] = ToolResult(
                         id=tc.id, ok=False, output='', error=f'parallel execution error: {exc}',
                     )
+                    elapsed_by_pos[pos] = 0.0
     else:
         for i in exec_indices:
-            results_by_pos[i] = _exec_one(ready[i][1])
+            results_by_pos[i] = _timed_exec(i)
 
     # Phase 3: Assemble results + PostToolUse hooks (sequential, per-tool)
     executed: List[ToolResult] = []
@@ -412,6 +475,15 @@ def _dispatch_tool_calls(
                 workspace_root=workspace_root,
             )
             hook_manager.run_event(HookEvent.PostToolUse, post_input)
+
+        # --- Tool render callback ---
+        if on_tool_result is not None:
+            on_tool_result(
+                tool_call.name,
+                dict(tool_call.arguments),
+                result,
+                elapsed_by_pos.get(i, 0.0),
+            )
 
         executed.append(result)
     return executed
@@ -574,12 +646,19 @@ def _compact_state_if_needed(
             entries=next_state.transcript,
         )
     )
+    new_compaction_count = next_state.compaction_count + 1
+    compaction_event: LoopEvent = LoopEvent(
+        type='compaction',
+        timestamp=_time.time(),
+        data={'reason': reason, 'compaction_count': new_compaction_count},
+    )
     return next_state.replace(
         transcript=(TranscriptEntry(kind='summary', content=summary),),
         compact_summary=summary,
-        compaction_count=next_state.compaction_count + 1,
+        compaction_count=new_compaction_count,
         archived_transcripts=tuple(archived_transcripts),
         last_compaction_reason=reason,
+        loop_events=tuple(next_state.loop_events) + (compaction_event,),
     )
 
 
@@ -598,6 +677,8 @@ def execute_tool_use_round(
     hook_manager: HookManager | None = None,
     loop_detector: LoopDetector | None = None,
     security_monitor: SecurityMonitor | None = None,
+    result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> StepResult[ToolUseState]:
     config = compression_config or CompactConfig()
     config.validate()
@@ -655,6 +736,16 @@ def execute_tool_use_round(
             metadata={'parse_error': True, 'raw_response': raw[:2000]},
         )
 
+    round_start_s = _time.time()
+    # Emit tool_call events
+    new_loop_events: list[LoopEvent] = list(effective_state.loop_events)
+    for call in parsed.tool_calls:
+        new_loop_events.append(LoopEvent(
+            type='tool_call',
+            timestamp=round_start_s,
+            data={'id': call.id, 'name': call.name},
+        ))
+
     executed = _dispatch_tool_calls(
         tool_context=tool_context,
         dispatch_map=dispatch_map,
@@ -664,7 +755,18 @@ def execute_tool_use_round(
         security_monitor=security_monitor,
         session_id=str(tool_context.workspace_root),
         workspace_root=str(tool_context.workspace_root),
+        result_cache=result_cache,
+        on_tool_result=on_tool_result,
     )
+    # Emit tool_result events
+    for result in executed:
+        evt: LoopEvent = LoopEvent(
+            type='tool_result',
+            timestamp=_time.time(),
+            data={'id': result.id, 'ok': result.ok, 'error': result.error},
+        )
+        new_loop_events.append(evt)
+
     updated_history = _append_tool_history(
         history=effective_state.history,
         thought=parsed.thought,
@@ -684,6 +786,7 @@ def execute_tool_use_round(
         rounds_since_todo_update=todo_snapshot.rounds_since_update,
         transcript=updated_transcript,
         background_notifications=notifications,
+        loop_events=tuple(new_loop_events),
     )
     compacted_state = _compact_state_if_needed(
         goal=effective_context.goal,
@@ -754,6 +857,7 @@ def make_tool_use_step(
     summarizer: SummarizerFn | None = None,
     hook_manager: HookManager | None = None,
     loop_detector: LoopDetector | None = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
 ) -> Callable[[StepContext[ToolUseState]], StepResult[ToolUseState]]:
     dispatch_map = build_tool_dispatch(skills=skills, extra_tools=extra_tools)
     tool_context = ToolContext(
@@ -761,6 +865,7 @@ def make_tool_use_step(
         policy=policy,
         background_runner=BackgroundCommandRunner(workspace_root),
     )
+    _cache = _ReadOnlyToolCache()
 
     def step(context: StepContext[ToolUseState]) -> StepResult[ToolUseState]:
         return execute_tool_use_round(
@@ -776,6 +881,8 @@ def make_tool_use_step(
             summarizer=summarizer,
             hook_manager=hook_manager,
             loop_detector=loop_detector,
+            on_tool_result=on_tool_result,
+            result_cache=_cache,
         )
 
     return step

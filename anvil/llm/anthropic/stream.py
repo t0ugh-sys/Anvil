@@ -22,6 +22,7 @@ def anthropic_stream_invoke_factory(
     thinking_budget_tokens: int = 0,
     enable_prompt_caching: bool = True,
     system_prompt: str = '',
+    on_chunk: Callable[[str], None] | None = None,
 ) -> Callable[[List[Dict[str, object]]], AnthropicChatResponse]:
     """Streaming Anthropic provider for real-time responses.
 
@@ -105,7 +106,11 @@ def anthropic_stream_invoke_factory(
                             if delta_type == 'thinking_delta':
                                 current_thinking += delta.get('thinking', '')
                             elif delta_type == 'text_delta':
-                                text_parts.append(delta.get('text', ''))
+                                chunk = delta.get('text', '')
+                                if chunk:
+                                    text_parts.append(chunk)
+                                    if on_chunk is not None:
+                                        on_chunk(chunk)
                         elif event_type == 'content_block_stop':
                             if current_thinking:
                                 thinking_blocks.append({

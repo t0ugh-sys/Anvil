@@ -14,6 +14,7 @@ while ASCII characters average ~0.25 tokens (4 chars per token).
 
 from __future__ import annotations
 
+import bisect
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence
@@ -37,29 +38,31 @@ MESSAGE_OVERHEAD_TOKENS = 10
 TOOL_USE_OVERHEAD_TOKENS = 50
 ROLE_OVERHEAD_TOKENS = 4
 
-# CJK Unified Ideographs and extensions
+# CJK Unified Ideographs and extensions — sorted (start, end) pairs for bisect lookup
 _CJK_RANGES = (
-    (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+    (0x3000, 0x303F),    # CJK Symbols and Punctuation
+    (0x3040, 0x309F),    # Hiragana
+    (0x30A0, 0x30FF),    # Katakana
     (0x3400, 0x4DBF),    # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),    # CJK Unified Ideographs
+    (0xAC00, 0xD7AF),    # Hangul Syllables
+    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
+    (0xFF00, 0xFFEF),    # Halfwidth and Fullwidth Forms
     (0x20000, 0x2A6DF),  # CJK Unified Ideographs Extension B
     (0x2A700, 0x2B73F),  # CJK Unified Ideographs Extension C
     (0x2B740, 0x2B81F),  # CJK Unified Ideographs Extension D
-    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
-    (0x3000, 0x303F),    # CJK Symbols and Punctuation
-    (0xFF00, 0xFFEF),    # Halfwidth and Fullwidth Forms
-    (0x3040, 0x309F),    # Hiragana
-    (0x30A0, 0x30FF),    # Katakana
-    (0xAC00, 0xD7AF),    # Hangul Syllables
 )
 
-# Pre-built range objects for O(1) containment checks
-_CJK_RANGE_SET = tuple(range(start, end + 1) for start, end in _CJK_RANGES)
+# Sorted start points for O(log n) bisect search
+_CJK_STARTS = [s for s, _ in _CJK_RANGES]
+_CJK_ENDS = [e for _, e in _CJK_RANGES]
 
 
 def _is_cjk(char: str) -> bool:
-    """Check if a character is CJK (Chinese/Japanese/Korean)."""
+    """O(log n) CJK check using bisect on sorted range boundaries."""
     code = ord(char)
-    return any(code in r for r in _CJK_RANGE_SET)
+    idx = bisect.bisect_right(_CJK_STARTS, code) - 1
+    return idx >= 0 and code <= _CJK_ENDS[idx]
 
 
 def _count_cjk(text: str) -> int:
@@ -218,13 +221,23 @@ class HybridTokenCounter:
 
     Starts with rough heuristic, switches to actual API usage
     once available. Provides the best estimate at minimal cost.
+    Per-model calibration ratios are shared across instances via a
+    module-level cache so that a calibrated ratio is reused immediately
+    by any new counter for the same model.
     """
 
-    def __init__(self) -> None:
+    # Module-level per-model chars-per-token cache
+    _model_calibration: Dict[str, float] = {}
+
+    def __init__(self, model: str = '') -> None:
+        self._model = model
         self._last_usage: TokenUsage | None = None
         self._last_message_count: int = 0
         self._last_total_chars: int = 0  # chars from last calibrated call
-        self._chars_per_token: float = CHARS_PER_TOKEN_DEFAULT
+        self._chars_per_token: float = (
+            HybridTokenCounter._model_calibration.get(model, CHARS_PER_TOKEN_DEFAULT)
+            if model else CHARS_PER_TOKEN_DEFAULT
+        )
 
     def update_from_response(
         self,
@@ -238,6 +251,11 @@ class HybridTokenCounter:
             self._last_usage = usage
             self._last_message_count = message_count
             self._last_total_chars = total_chars
+            if total_chars > 0:
+                ratio = total_chars / usage.input_tokens
+                self._chars_per_token = ratio
+                if self._model:
+                    HybridTokenCounter._model_calibration[self._model] = ratio
 
     def estimate_messages(self, messages: List[Dict[str, Any]]) -> int:
         """Estimate tokens for messages, using API calibration if available."""
@@ -249,9 +267,17 @@ class HybridTokenCounter:
             )
             if total_chars <= 0:
                 return 0
-            # Use calibrated chars-per-token ratio from last API response
-            chars_per_token = self._last_total_chars / self._last_usage.input_tokens
-            return max(1, int(total_chars / chars_per_token))
+            return max(1, int(total_chars / self._chars_per_token))
+
+        # Check if a calibration exists for this model even from a prior instance
+        if self._model and self._model in HybridTokenCounter._model_calibration:
+            total_chars = sum(
+                len(json.dumps(msg, ensure_ascii=False)) if isinstance(msg.get('content'), list)
+                else len(str(msg.get('content', '')))
+                for msg in messages
+            )
+            if total_chars > 0:
+                return max(1, int(total_chars / HybridTokenCounter._model_calibration[self._model]))
 
         # Fallback to heuristic
         return estimate_messages_tokens(messages)

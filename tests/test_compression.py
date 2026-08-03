@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+import unittest
 
 import _bootstrap  # noqa: F401
 
@@ -16,6 +17,7 @@ from anvil.compression import (
     MessageGroup,
     TranscriptEntry,
     archive_compacted_messages,
+    context_window_for_model,
     group_messages_by_rounds,
     micro_compact_entries,
     micro_compact_messages,
@@ -248,3 +250,35 @@ class TestTranscriptEntry:
         now = time.time()
         entry = TranscriptEntry(kind='thought', content='x', created_at=now)
         assert entry.created_at == now
+
+
+class TestContextWindowForModel(unittest.TestCase):
+    def test_known_claude_sonnet_5(self):
+        self.assertEqual(context_window_for_model('claude-sonnet-5'), 200_000)
+
+    def test_known_claude_haiku_4_5_with_date_suffix(self):
+        self.assertEqual(context_window_for_model('claude-haiku-4-5-20251001'), 200_000)
+
+    def test_known_claude_3_5_sonnet(self):
+        self.assertEqual(context_window_for_model('claude-3-5-sonnet-20241022'), 200_000)
+
+    def test_unknown_model_returns_default(self):
+        self.assertEqual(context_window_for_model('gpt-4o'), 200_000)
+
+    def test_empty_model_id_returns_default(self):
+        self.assertEqual(context_window_for_model(''), 200_000)
+
+
+class TestCompactConfigForModel(unittest.TestCase):
+    def test_for_model_sets_max_context_tokens(self):
+        cfg = CompactConfig.for_model('claude-sonnet-5')
+        self.assertEqual(cfg.max_context_tokens, int(200_000 * 0.75))
+
+    def test_for_model_allows_overrides(self):
+        cfg = CompactConfig.for_model('claude-sonnet-5', micro_keep_last_results=5)
+        self.assertEqual(cfg.micro_keep_last_results, 5)
+        self.assertEqual(cfg.max_context_tokens, int(200_000 * 0.75))
+
+    def test_for_model_unknown_uses_default_window(self):
+        cfg = CompactConfig.for_model('unknown-model')
+        self.assertEqual(cfg.max_context_tokens, int(200_000 * 0.75))

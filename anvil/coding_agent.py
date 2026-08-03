@@ -17,7 +17,11 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     'run_coding_agent',
+    'build_coding_step',
     'CodingAgentState',
+    'DeciderFn',
+    'SummarizerFn',
+    'ToolUseState',
 ]
 
 # Backward-compatible alias
@@ -33,6 +37,7 @@ def build_coding_step(
     compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
+    on_tool_result=None,
 ):
     return make_tool_use_step(
         decider=decider,
@@ -43,6 +48,7 @@ def build_coding_step(
         compression_config=compression_config,
         transcripts_dir=transcripts_dir,
         summarizer=summarizer,
+        on_tool_result=on_tool_result,
     )
 
 
@@ -60,6 +66,7 @@ def run_coding_agent(
     compression_config: CompactConfig | None = None,
     transcripts_dir: Path | None = None,
     summarizer: SummarizerFn | None = None,
+    on_tool_result=None,
 ) -> RunResult[ToolUseState]:
     step = build_coding_step(
         decider,
@@ -70,6 +77,7 @@ def run_coding_agent(
         compression_config=compression_config,
         transcripts_dir=transcripts_dir,
         summarizer=summarizer,
+        on_tool_result=on_tool_result,
     )
     agent = AnvilAgent(step=step, stop=stop or StopConfig(max_steps=20, max_elapsed_s=60.0))
     return agent.run(

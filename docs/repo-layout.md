@@ -61,8 +61,6 @@
 
 ### Standalone Modules (Top-Level in `anvil/`)
 - `api.py`: API interfaces
-- `cli.py`: general loop CLI
-- `agent_cli.py`: coding-agent oriented CLI
 - `coding_agent.py`: coding-agent orchestration
 - `messages.py`: message types
 - `prompts.py`: prompt templates

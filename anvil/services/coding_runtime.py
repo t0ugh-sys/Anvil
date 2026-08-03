@@ -5,16 +5,12 @@ import json
 from typing import Any, Dict, Tuple
 
 from ..agent.protocol import render_agent_step_schema
-from ..coding_agent import run_coding_agent
 from ..compression import summarize_entries_deterministically
-from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
-from ..runtime import CodeRuntime
 from ..infra.skills import SkillLoader, list_skills
-from ..utils import resolve_goal
 
 
-__all__ = ['build_coding_prompt', 'build_coding_decider', 'build_coding_summarizer', 'load_skills_from_args', 'run_code_command']
+__all__ = ['build_coding_prompt', 'build_coding_decider', 'build_coding_summarizer', 'load_skills_from_args']
 
 
 
@@ -113,9 +109,12 @@ def build_coding_decider(
     args: argparse.Namespace,
     skills: SkillLoader | None = None,
     invoke_factory=None,
+    *,
+    usage_tracker=None,
+    rate_limit_tracker=None,
 ):
     factory = invoke_factory or build_invoke_from_args
-    invoke = factory(args, mode='coding')
+    invoke = factory(args, mode='coding', usage_tracker=usage_tracker, rate_limit_tracker=rate_limit_tracker)
 
     def decider(
         goal: str,
@@ -183,40 +182,3 @@ def load_skills_from_args(args: argparse.Namespace) -> SkillLoader | None:
     return loader
 
 
-def run_code_command(args: argparse.Namespace) -> int:
-    goal = resolve_goal(getattr(args, 'goal', None), getattr(args, 'goal_file', None))
-    runtime = CodeRuntime(args, goal=goal)
-    if not runtime.goal.strip():
-        raise ValueError('goal is required unless resuming from a session with a stored goal')
-    skills = load_skills_from_args(args)
-    decider = build_coding_decider(args, skills)
-    summarizer = build_coding_summarizer(args)
-    if runtime.observer is not None:
-        runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
-    result = run_coding_agent(
-        goal=runtime.goal,
-        decider=decider,
-        workspace_root=runtime.workspace_root,
-        stop=StopConfig(max_steps=args.max_steps, max_elapsed_s=args.timeout_s),
-        observer=runtime.observer,
-        context_provider=runtime.build_context_provider(),
-        skills=skills,
-        policy=runtime.build_policy(),
-        task_store=runtime.task_store,
-        compression_config=runtime.compression_config,
-        transcripts_dir=runtime.transcripts_dir,
-        summarizer=summarizer,
-    )
-    payload = runtime.finalize(result)
-    if args.output == 'json':
-        print(json.dumps(payload, ensure_ascii=False))
-    else:
-        print(f"done: {result.done}")
-        print(f"stop_reason: {result.stop_reason.value}")
-        print(f"steps: {result.steps}")
-        print(f"final_output: {result.final_output}")
-        print(f"session_id: {payload['session_id']}")
-        print(f"memory_run_dir: {payload['memory_run_dir']}")
-        if 'run_dir' in payload:
-            print(f"run_dir: {payload['run_dir']}")
-    return 0 if result.done else 1
