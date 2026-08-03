@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import copy
 import sys
 from pathlib import Path
 from typing import List
 
-from ..coding_agent import run_coding_agent
+from ..coding_agent import run_coding_agent, run_coding_agent_async
 from ..config.layered import build_layered_config
 from ..core.types import StopConfig
 from ..llm.providers import build_invoke_from_args
@@ -188,7 +189,7 @@ def build_interactive_turn_runner(
             def on_tool_result(tool_name, args, result, elapsed_s):
                 print_tool_call(tool_name, args, result, elapsed_s, width=render_width, color=use_color)
 
-        result = run_coding_agent(
+        result = asyncio.run(run_coding_agent_async(
             goal=runtime.goal,
             decider=decider,
             workspace_root=runtime.workspace_root,
@@ -202,7 +203,7 @@ def build_interactive_turn_runner(
             transcripts_dir=runtime.transcripts_dir,
             summarizer=summarizer,
             on_tool_result=on_tool_result,
-        )
+        ))
         payload = runtime.finalize(result)
         output = _extract_interactive_output(payload)
         if _should_use_plain_chat_fallback(output):

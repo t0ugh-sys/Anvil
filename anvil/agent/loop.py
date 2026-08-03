@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -40,7 +41,9 @@ __all__ = [
     'SummarizerFn',
     'build_tool_dispatch',
     'execute_tool_use_round',
+    'execute_tool_use_round_async',
     'make_tool_use_step',
+    'make_tool_use_step_async',
     '_build_reflection',
     '_looks_like_file_action',
 ]
@@ -869,6 +872,375 @@ def make_tool_use_step(
 
     def step(context: StepContext[ToolUseState]) -> StepResult[ToolUseState]:
         return execute_tool_use_round(
+            decider=decider,
+            context=context,
+            tool_context=tool_context,
+            dispatch_map=dispatch_map,
+            nag_after_rounds=todo_nag_after_rounds,
+            skills=skills,
+            task_store=task_store,
+            compression_config=compression_config,
+            transcripts_dir=transcripts_dir,
+            summarizer=summarizer,
+            hook_manager=hook_manager,
+            loop_detector=loop_detector,
+            on_tool_result=on_tool_result,
+            result_cache=_cache,
+        )
+
+    return step
+
+
+async def _decide_next_step_async(
+    decider: DeciderFn,
+    context: StepContext[ToolUseState],
+    state_summary: Dict[str, object],
+) -> str:
+    return await asyncio.to_thread(
+        decider,
+        context.goal,
+        context.state.history,
+        context.state.tool_results,
+        state_summary,
+        context.last_steps,
+    )
+
+
+async def _dispatch_tool_calls_async(
+    *,
+    tool_context: ToolContext,
+    dispatch_map: ToolDispatchMap,
+    tool_calls,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
+    security_monitor: SecurityMonitor | None = None,
+    session_id: str = '',
+    workspace_root: str = '',
+    result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
+) -> List[ToolResult]:
+    # Phase 1: Loop detection + Security monitoring + PreToolUse hooks (sequential)
+    ready: list[tuple[int, object, ToolResult | None]] = []
+    for idx, tool_call in enumerate(tool_calls):
+        if security_monitor is not None and security_monitor.is_blocked(tool_call.name):
+            ready.append((idx, tool_call, ToolResult(
+                id=tool_call.id, ok=False, output='',
+                error=f'SECURITY: {tool_call.name} is blocked by security monitor',
+            )))
+            continue
+
+        security_alert = None
+        if security_monitor is not None:
+            security_alert = security_monitor.record_call(tool_call.name)
+
+        if loop_detector is not None:
+            loop_msg = loop_detector.check(tool_call.name, tool_call.arguments)
+            if loop_msg:
+                ready.append((idx, tool_call, ToolResult(
+                    id=tool_call.id, ok=False, output='', error=loop_msg,
+                )))
+                continue
+
+        if hook_manager is not None and hook_manager.has_hooks(HookEvent.PreToolUse):
+            hook_input = build_hook_input_for_tool(
+                HookEvent.PreToolUse,
+                tool_call.name,
+                tool_call.arguments,
+                session_id=session_id,
+                workspace_root=workspace_root,
+            )
+            hook_result = hook_manager.run_event(HookEvent.PreToolUse, hook_input)
+            if not hook_result.approved:
+                ready.append((idx, tool_call, ToolResult(
+                    id=tool_call.id, ok=False, output='',
+                    error=f'blocked by hook: {hook_result.error}',
+                )))
+                continue
+            if hook_result.modified_input:
+                tool_call = type(tool_call)(
+                    id=tool_call.id,
+                    name=tool_call.name,
+                    arguments=hook_result.modified_input,
+                )
+
+        ready.append((idx, tool_call, None))
+
+    # Phase 2: Execute tools with asyncio.gather + asyncio.to_thread
+    elapsed_by_pos: dict[int, float] = {}
+
+    def _exec_one(tc):
+        if result_cache is not None:
+            cached = result_cache.get(tc.name, dict(tc.arguments))
+            if cached is not None:
+                return ToolResult(id=tc.id, ok=cached.ok, output=cached.output, error=cached.error)
+        result = execute_tool_call(tool_context, tc, dispatch_map)
+        if result_cache is not None:
+            result_cache.set(tc.name, dict(tc.arguments), result)
+        return result
+
+    async def _timed_exec_async(i):
+        t0 = _time.perf_counter()
+        result = await asyncio.to_thread(_exec_one, ready[i][1])
+        elapsed_by_pos[i] = _time.perf_counter() - t0
+        return i, result
+
+    exec_indices = [i for i, (idx, tc, pre) in enumerate(ready) if pre is None]
+    results_by_pos: dict[int, ToolResult] = {}
+
+    if len(exec_indices) > 1:
+        gathered = await asyncio.gather(
+            *[_timed_exec_async(i) for i in exec_indices],
+            return_exceptions=True,
+        )
+        for item in gathered:
+            if isinstance(item, Exception):
+                continue
+            pos, result = item
+            results_by_pos[pos] = result
+        # Fill in errors for any failed gather slots
+        for i in exec_indices:
+            if i not in results_by_pos:
+                tc = ready[i][1]
+                results_by_pos[i] = ToolResult(
+                    id=tc.id, ok=False, output='', error='parallel execution error',
+                )
+                elapsed_by_pos[i] = 0.0
+    elif exec_indices:
+        i = exec_indices[0]
+        _, result = await _timed_exec_async(i)
+        results_by_pos[i] = result
+
+    # Phase 3: Assemble results + PostToolUse hooks (sequential)
+    executed: List[ToolResult] = []
+    for i, (idx, tool_call, pre_result) in enumerate(ready):
+        result = pre_result if pre_result is not None else results_by_pos[i]
+
+        if hook_manager is not None and hook_manager.has_hooks(HookEvent.PostToolUse):
+            post_input = build_hook_input_for_tool(
+                HookEvent.PostToolUse,
+                tool_call.name,
+                tool_call.arguments,
+                tool_output=result.output if result.ok else (result.error or ''),
+                session_id=session_id,
+                workspace_root=workspace_root,
+            )
+            hook_manager.run_event(HookEvent.PostToolUse, post_input)
+
+        if on_tool_result is not None:
+            on_tool_result(
+                tool_call.name,
+                dict(tool_call.arguments),
+                result,
+                elapsed_by_pos.get(i, 0.0),
+            )
+
+        executed.append(result)
+    return executed
+
+
+async def execute_tool_use_round_async(
+    *,
+    decider: DeciderFn,
+    context: StepContext[ToolUseState],
+    tool_context: ToolContext,
+    dispatch_map: ToolDispatchMap,
+    nag_after_rounds: int = 3,
+    skills: Optional['SkillLoader'] = None,
+    task_store: TaskStore | None = None,
+    compression_config: CompactConfig | None = None,
+    transcripts_dir: Path | None = None,
+    summarizer: SummarizerFn | None = None,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
+    security_monitor: SecurityMonitor | None = None,
+    result_cache: '_ReadOnlyToolCache | None' = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
+) -> StepResult[ToolUseState]:
+    config = compression_config or CompactConfig()
+    config.validate()
+    background_runner = tool_context.background_runner
+    notifications = background_runner.drain_notifications() if background_runner is not None else tuple()
+    effective_state = _apply_background_notifications(context.state, notifications)
+    effective_context = StepContext(
+        goal=context.goal,
+        state=effective_state,
+        step_index=context.step_index,
+        started_at_s=context.started_at_s,
+        now_s=context.now_s,
+        history=context.history,
+        state_summary=context.state_summary,
+        last_steps=context.last_steps,
+    )
+    augmented_state_summary = _augment_state_summary(
+        effective_context,
+        nag_after_rounds=nag_after_rounds,
+        skills=skills,
+        task_store=task_store,
+        compression_config=config,
+        background_runner=background_runner,
+    )
+    augmented_state_summary.setdefault('workspace', {'root': str(tool_context.workspace_root)})
+    reflection = _build_reflection(list(effective_state.tool_results))
+    if reflection:
+        augmented_state_summary['reflection'] = reflection
+    if loop_detector is not None:
+        augmented_state_summary['loop_detector'] = {'max_repeats': loop_detector.max_repeats}
+    todo_manager = TodoManager(
+        TodoSnapshot(
+            items=effective_state.todos,
+            rounds_since_update=effective_state.rounds_since_todo_update,
+        )
+    )
+    tool_context = ToolContext(
+        workspace_root=tool_context.workspace_root,
+        policy=tool_context.policy,
+        todo_manager=todo_manager,
+        skill_loader=skills,
+        compact_manager=CompactManager(),
+        background_runner=background_runner,
+    )
+    raw = await _decide_next_step_async(decider, effective_context, augmented_state_summary)
+    parsed = parse_agent_step(raw)
+    if parsed is None:
+        output = 'invalid agent step json. expected schema: ' + render_agent_step_schema()
+        return StepResult(
+            output=output,
+            state=effective_state,
+            done=False,
+            metadata={'parse_error': True, 'raw_response': raw[:2000]},
+        )
+
+    round_start_s = _time.time()
+    new_loop_events: list[LoopEvent] = list(effective_state.loop_events)
+    for call in parsed.tool_calls:
+        new_loop_events.append(LoopEvent(
+            type='tool_call',
+            timestamp=round_start_s,
+            data={'id': call.id, 'name': call.name},
+        ))
+
+    executed = await _dispatch_tool_calls_async(
+        tool_context=tool_context,
+        dispatch_map=dispatch_map,
+        tool_calls=parsed.tool_calls,
+        hook_manager=hook_manager,
+        loop_detector=loop_detector,
+        security_monitor=security_monitor,
+        session_id=str(tool_context.workspace_root),
+        workspace_root=str(tool_context.workspace_root),
+        result_cache=result_cache,
+        on_tool_result=on_tool_result,
+    )
+    for result in executed:
+        evt: LoopEvent = LoopEvent(
+            type='tool_result',
+            timestamp=_time.time(),
+            data={'id': result.id, 'ok': result.ok, 'error': result.error},
+        )
+        new_loop_events.append(evt)
+
+    updated_history = _append_tool_history(
+        history=effective_state.history,
+        thought=parsed.thought,
+        tool_results=executed,
+    )
+    updated_transcript = _append_transcript_entries(
+        effective_state,
+        thought=parsed.thought,
+        tool_calls=parsed.tool_calls,
+        tool_results=executed,
+    )
+    todo_snapshot = todo_manager.snapshot(previous_rounds_since_update=effective_state.rounds_since_todo_update)
+    draft_state = effective_state.replace(
+        history=updated_history,
+        tool_results=tuple(executed),
+        todos=todo_snapshot.items,
+        rounds_since_todo_update=todo_snapshot.rounds_since_update,
+        transcript=updated_transcript,
+        background_notifications=notifications,
+        loop_events=tuple(new_loop_events),
+    )
+    compacted_state = _compact_state_if_needed(
+        goal=effective_context.goal,
+        state=draft_state,
+        transcripts_dir=transcripts_dir,
+        summarizer=summarizer,
+        compression_config=config,
+        compact_manager=tool_context.compact_manager or CompactManager(),
+    )
+    new_state = compacted_state
+    metadata = _build_round_metadata(
+        context=effective_context,
+        state_summary=augmented_state_summary,
+        thought=parsed.thought,
+        plan=parsed.plan,
+        tool_calls=parsed.tool_calls,
+        tool_results=executed,
+    )
+    metadata['raw_response'] = raw[:2000]
+    metadata['todo_state'] = _build_todo_state_summary(new_state, nag_after_rounds=nag_after_rounds)
+    metadata['compression_state'] = {
+        'summary': new_state.compact_summary,
+        'compaction_count': new_state.compaction_count,
+        'archived_transcripts': list(new_state.archived_transcripts[-5:]),
+        'recent_transcript': [entry.render_line() for entry in new_state.transcript[-config.recent_transcript_entries :]],
+        'last_compaction_reason': new_state.last_compaction_reason,
+    }
+    metadata['background_notifications'] = [
+        {'id': item.id, 'ok': item.ok, 'output': item.output[:500], 'error': item.error}
+        for item in notifications
+    ]
+    metadata['background_tasks'] = [
+        item.to_dict() for item in background_runner.snapshot()
+    ] if background_runner is not None else []
+    if not metadata['has_tool_calls']:
+        previous_failed_tools = [item for item in effective_state.tool_results if not item.ok]
+        if previous_failed_tools:
+            last_error = previous_failed_tools[-1].error or 'tool failed'
+            return StepResult(
+                output=f'tool action failed: {last_error}',
+                state=new_state,
+                done=False,
+                metadata={**metadata, 'unresolved_tool_error': True},
+            )
+        if _looks_like_file_action(effective_context.goal) and not _has_successful_file_mutation(effective_state):
+            return StepResult(
+                output='tool action required: file operation requests must be completed with tool calls',
+                state=new_state,
+                done=False,
+                metadata={**metadata, 'missing_file_mutation': True},
+            )
+        final = parsed.final or parsed.thought or 'done'
+        return StepResult(output=final, state=new_state, done=True, metadata=metadata)
+    return StepResult(output='continue', state=new_state, done=False, metadata=metadata)
+
+
+def make_tool_use_step_async(
+    *,
+    decider: DeciderFn,
+    workspace_root: Path,
+    skills: Optional['SkillLoader'] = None,
+    policy: ToolPolicy = ToolPolicy.allow_all(),
+    extra_tools: Optional[ToolDispatchMap] = None,
+    todo_nag_after_rounds: int = 3,
+    task_store: TaskStore | None = None,
+    compression_config: CompactConfig | None = None,
+    transcripts_dir: Path | None = None,
+    summarizer: SummarizerFn | None = None,
+    hook_manager: HookManager | None = None,
+    loop_detector: LoopDetector | None = None,
+    on_tool_result: 'Callable[[str, dict, ToolResult, float], None] | None' = None,
+) -> 'Callable[[StepContext[ToolUseState]], object]':
+    dispatch_map = build_tool_dispatch(skills=skills, extra_tools=extra_tools)
+    tool_context = ToolContext(
+        workspace_root=workspace_root,
+        policy=policy,
+        background_runner=BackgroundCommandRunner(workspace_root),
+    )
+    _cache = _ReadOnlyToolCache()
+
+    async def step(context: StepContext[ToolUseState]) -> StepResult[ToolUseState]:
+        return await execute_tool_use_round_async(
             decider=decider,
             context=context,
             tool_context=tool_context,
