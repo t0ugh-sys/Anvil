@@ -167,8 +167,8 @@ if sys.platform == "win32":
 **渐进式方案**（不做全量重写）：
 
 1. **阶段一** ✅：`anvil/llm/_http.py` 新增 `_http_post_json_async()`（`asyncio.to_thread` 包裹同步 urllib，零新依赖）；`anvil/llm/anthropic/client.py` 新增 `anthropic_async_invoke_factory()` / `_anthropic_async_invoke_factory()`，对外暴露 `async def invoke(prompt: str) -> str`（`AsyncInvokeFn` 类型见 `_types.py`），内含独立的异步重试/退避逻辑；同步接口 `anthropic_invoke_factory()` 保持不变、未受影响。测试见 `tests/test_anthropic_async.py`。
-2. **阶段二**（待办）：`tool_use_loop.py` 改为 `async` 循环，工具并行执行改用 `asyncio.gather()`，废弃 `ThreadPoolExecutor`。
-3. **阶段三**（待办）：`team_runtime.py` / `mailbox.py` 改为原生 async，消除锁竞争。
+2. **阶段二** ✅：`anvil/agent/loop.py` 新增 `_dispatch_tool_calls_async()`（`asyncio.gather()` + `asyncio.to_thread()` 替代 `ThreadPoolExecutor`），以及 `execute_tool_use_round_async` / `make_tool_use_step_async`；`anvil/coding_agent.py` 新增 `run_coding_agent_async()`；`session_runtime.py` 通过 `asyncio.run()` 接入。同步路径完全保留。测试 562/562 通过。
+3. **阶段三** ✅：`anvil/runtime/team.py` 新增 `spawn_teammate_async`（`asyncio.create_task` 替代 `threading.Thread`）、`_run_teammate_loop_async`（`asyncio.sleep` + `await run_coding_agent_async`）、`shutdown_all_async`、`dispatch_ready_tasks_async`（`asyncio.Lock`）；同步 API 完全保留。测试见 `tests/test_team_runtime_async.py`（5 个），567/567 通过。
 
 **风险**：Python 3.10 async 兼容性需验证，特别是 Windows 上的 `asyncio` 事件循环策略。阶段一使用 `asyncio.to_thread`，在 Windows `ProactorEventLoop` 下行为等同线程池，风险较低。
 
