@@ -47,7 +47,10 @@ except ImportError:
 # No-op implementations (used when OTel is not installed)
 # ---------------------------------------------------------------------------
 
-class NoOpSpan:
+_PREVIOUS_NOOP_SPAN = globals().get('NoOpSpan', object)
+
+
+class NoOpSpan(_PREVIOUS_NOOP_SPAN):
     """Minimal span that satisfies the OTel Span interface without doing anything."""
 
     def set_attribute(self, key: str, value: Any) -> 'NoOpSpan':
