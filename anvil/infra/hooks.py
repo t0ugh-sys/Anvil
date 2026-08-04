@@ -27,6 +27,7 @@ Hook configuration (in settings):
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import threading
@@ -47,6 +48,11 @@ __all__ = [
     'SecurityMonitor',
     'SecurityEvent',
 ]
+
+_WINDOWS_SHELL_BUILTINS = frozenset({
+    'call', 'cd', 'copy', 'dir', 'echo', 'exit', 'if', 'md', 'mkdir',
+    'move', 'rd', 'rem', 'set', 'type', 'ver', 'where',
+})
 
 
 def _event_name(event: HookEvent | str) -> str:
@@ -148,13 +154,17 @@ def run_hook(
     """
     timeout = timeout_s or config.timeout_s
     try:
-        # Default to shlex.split for safety; use shell=True only when explicitly requested.
-        cmd: str | list[str] = (
-            config.command if config.shell else shlex.split(config.command)
-        )
+        # Keep direct execution as the default. Windows shell builtins such as
+        # ``echo`` do not have an executable, so invoke only those through the
+        # platform shell when the hook explicitly omitted ``shell=True``.
+        parts = shlex.split(config.command)
+        use_shell = config.shell
+        if not use_shell and os.name == 'nt' and parts:
+            use_shell = parts[0].lower() in _WINDOWS_SHELL_BUILTINS
+        cmd: str | list[str] = config.command if use_shell else parts
         result = subprocess.run(
             cmd,
-            shell=config.shell,
+            shell=use_shell,
             input=hook_input.to_json(),
             capture_output=True,
             text=True,

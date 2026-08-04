@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -9,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
-from anvil.coding_agent import DeciderFn, run_coding_agent
+from anvil.coding_agent import DeciderFn, run_coding_agent, run_coding_agent_async
 from anvil.core.serialization import run_result_to_dict
 from anvil.core.types import RunResult, StopConfig
 from anvil.infra.policies import ToolPolicy
@@ -22,6 +23,9 @@ __all__ = [
     'TeamMessageType', 'TeamMessage', 'TeamMember', 'TeamConfig',
     'TeamConfigStore', 'JsonlTeamInboxStore',
     'PersistentTeammateSpec', 'PersistentTeamRuntime',
+    # async API
+    # spawn_teammate_async, shutdown_all_async, dispatch_ready_tasks_async
+    # are methods of PersistentTeamRuntime — no module-level exports needed
 ]
 
 
@@ -259,6 +263,10 @@ class PersistentTeamRuntime:
         self._stop_events: Dict[str, threading.Event] = {}
         self._specs: Dict[str, PersistentTeammateSpec] = {}
         self._lock = threading.Lock()
+        # Async variants (populated by spawn_teammate_async)
+        self._tasks: Dict[str, asyncio.Task] = {}
+        self._async_stop_events: Dict[str, asyncio.Event] = {}
+        self._async_lock: asyncio.Lock | None = None
 
     def spawn_teammate(self, spec: PersistentTeammateSpec) -> None:
         with self._lock:
@@ -389,6 +397,200 @@ class PersistentTeamRuntime:
         for name, thread in list(self._threads.items()):
             remaining = max(0.0, deadline - time.time())
             thread.join(timeout=remaining)
+
+    # ------------------------------------------------------------------ async
+
+    def _get_async_lock(self) -> asyncio.Lock:
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
+
+    async def spawn_teammate_async(self, spec: PersistentTeammateSpec) -> None:
+        """Async variant of spawn_teammate — creates an asyncio.Task instead of a thread."""
+        lock = self._get_async_lock()
+        async with lock:
+            if spec.name in self._tasks:
+                raise ValueError(f'teammate already exists: {spec.name}')
+            self.config_store.upsert_member(
+                TeamMember(name=spec.name, role=spec.role, status='idle', metadata=spec.metadata)
+            )
+            stop_event = asyncio.Event()
+            task = asyncio.create_task(
+                self._run_teammate_loop_async(spec, stop_event),
+                name=f'teammate-{spec.name}',
+            )
+            self._async_stop_events[spec.name] = stop_event
+            self._specs[spec.name] = spec
+            self._tasks[spec.name] = task
+
+    async def shutdown_all_async(self, *, sender: str = 'lead', timeout_s: float = 5.0) -> None:
+        """Async variant of shutdown_all — sends shutdown messages then awaits tasks."""
+        for name in list(self._tasks.keys()):
+            self.shutdown_teammate(name, sender=sender)
+        deadline = asyncio.get_event_loop().time() + timeout_s
+        for name, task in list(self._tasks.items()):
+            remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=remaining)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def dispatch_ready_tasks_async(self, *, sender: str = 'lead') -> Tuple[str, ...]:
+        """Async variant of dispatch_ready_tasks — uses asyncio.Lock."""
+        lock = self._get_async_lock()
+        async with lock:
+            try:
+                graph = self.task_store.load_graph()
+            except Exception:
+                return tuple()
+            if not graph.tasks():
+                return tuple()
+            members = {
+                member.name: member
+                for member in self.config_store.load().members
+                if member.status == 'idle'
+            }
+            assigned: list[str] = []
+            for task in graph.ready_tasks():
+                teammate_name = self._pick_teammate_for_task(task, members)
+                if teammate_name is None:
+                    continue
+                graph.assign_task(task.id, teammate_name)
+                graph.mark_running(task.id, metadata={'assigned_by': sender})
+                members.pop(teammate_name, None)
+                self.inbox_store.send(
+                    TeamMessage(
+                        id=uuid.uuid4().hex,
+                        sender=sender,
+                        recipient=teammate_name,
+                        message_type=TeamMessageType.message,
+                        body=task.goal,
+                        metadata={'task_id': task.id, 'task_title': task.title},
+                    )
+                )
+                assigned.append(task.id)
+            if assigned:
+                self.task_store.save_graph(graph)
+            return tuple(assigned)
+
+    async def _run_teammate_loop_async(
+        self, spec: PersistentTeammateSpec, stop_event: asyncio.Event
+    ) -> None:
+        """Async teammate loop — replaces threading.Thread + time.sleep with asyncio."""
+        consecutive_from: Dict[str, int] = {}
+        try:
+            while not stop_event.is_set():
+                messages = self.inbox_store.drain(spec.name)
+                if not messages:
+                    await asyncio.sleep(0.05)
+                    continue
+                for message in messages:
+                    if message.message_type == TeamMessageType.shutdown_request:
+                        self.config_store.update_member_status(spec.name, 'shutdown')
+                        if message.sender:
+                            self.inbox_store.send(
+                                TeamMessage(
+                                    id=uuid.uuid4().hex,
+                                    sender=spec.name,
+                                    recipient=message.sender,
+                                    message_type=TeamMessageType.shutdown_response,
+                                    body='shutdown accepted',
+                                    metadata={'approved': True},
+                                )
+                            )
+                        stop_event.set()
+                        break
+                    if message.message_type == TeamMessageType.plan_approval_request:
+                        request_id = str(message.metadata.get('request_id', message.id))
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.plan_approval_response,
+                                body='plan approved',
+                                metadata={'request_id': request_id, 'approved': True},
+                            )
+                        )
+                        continue
+                    if message.message_type == TeamMessageType.plan_approval_response:
+                        continue
+                    if message.message_type not in {TeamMessageType.message, TeamMessageType.broadcast}:
+                        continue
+                    sender = message.sender or 'unknown'
+                    consecutive_from[sender] = consecutive_from.get(sender, 0) + 1
+                    for s in list(consecutive_from):
+                        if s != sender:
+                            consecutive_from[s] = 0
+                    if consecutive_from[sender] > spec.max_consecutive_same_sender:
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=sender,
+                                message_type=TeamMessageType.message,
+                                body=f'PING-PONG LIMIT: {spec.max_consecutive_same_sender} consecutive messages from {sender}. '
+                                     f'Stopping interaction to prevent infinite loop. Please consolidate your requests.',
+                                metadata={'ping_pong_limit': True, 'source_message_id': message.id},
+                            )
+                        )
+                        consecutive_from[sender] = 0
+                        continue
+                    self.config_store.update_member_status(spec.name, 'working')
+                    try:
+                        result = await run_coding_agent_async(
+                            goal=message.body,
+                            decider=spec.decider,
+                            workspace_root=spec.workspace_root,
+                            stop=spec.stop,
+                            policy=spec.policy,
+                            skills=_load_skills(spec.skills),
+                        )
+                        task_id = str(message.metadata.get('task_id', '')).strip()
+                        if task_id:
+                            self._complete_task(task_id, spec.name, result.done, result)
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.message,
+                                body=result.final_output,
+                                metadata={
+                                    'source_message_id': message.id,
+                                    'task_id': task_id,
+                                    'done': result.done,
+                                    'stop_reason': result.stop_reason.value,
+                                    'payload': run_result_to_dict(result, include_history=True),
+                                },
+                            )
+                        )
+                    except Exception as exc:
+                        self.inbox_store.send(
+                            TeamMessage(
+                                id=uuid.uuid4().hex,
+                                sender=spec.name,
+                                recipient=message.sender or 'lead',
+                                message_type=TeamMessageType.message,
+                                body=f'ERROR: {exc}',
+                                metadata={'source_message_id': message.id, 'error': True},
+                            )
+                        )
+                    finally:
+                        self.config_store.update_member_status(spec.name, 'idle')
+                    await self.dispatch_ready_tasks_async(sender='scheduler')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            try:
+                self.config_store.update_member_status(spec.name, 'idle')
+            except Exception:
+                pass
+            raise
 
     def teammate_status(self, name: str) -> str:
         for member in self.config_store.load().members:

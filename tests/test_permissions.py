@@ -36,7 +36,8 @@ class PermissionManagerTests(unittest.TestCase):
             call = ToolCall(id='call_1', name='write_file', arguments={'path': 'x.txt', 'content': 'x'})
             result = execute_tool_call(ToolContext(workspace_root=tmp_dir, policy=policy), call, build_default_tools())
             self.assertFalse(result.ok)
-            self.assertEqual(result.metadata.get('permission_decision'), 'ask')
+            # With no ask_fn registered, balanced mode blocks silently and records deny
+            self.assertEqual(result.metadata.get('permission_decision'), 'deny')
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

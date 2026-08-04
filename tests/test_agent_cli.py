@@ -136,7 +136,10 @@ class AgentCliTests(unittest.TestCase):
         self.assertTrue(_should_use_plain_chat_fallback('Stopped without final output (reason: max_steps).'))
         self.assertTrue(_should_use_plain_chat_fallback('invalid agent step json. expected schema: {}'))
         self.assertTrue(_should_use_plain_chat_fallback('Run failed: invalid Anthropic response format'))
-        self.assertFalse(_should_use_plain_chat_fallback('done'))
+        self.assertTrue(_should_use_plain_chat_fallback('done'))
+        self.assertTrue(_should_use_plain_chat_fallback('ok'))
+        self.assertTrue(_should_use_plain_chat_fallback(''))
+        self.assertFalse(_should_use_plain_chat_fallback('I am Anvil, your coding assistant.'))
 
     def test_should_detect_action_requests_that_must_not_plain_chat_fallback(self) -> None:
         self.assertTrue(_looks_like_action_request('在D:\\workspace新增一个abc，并在abc新建一个.md文件'))
@@ -191,12 +194,15 @@ class AgentCliTests(unittest.TestCase):
             with patch('anvil.services.session_runtime.load_skills_from_args', return_value=None):
                 with patch('anvil.services.session_runtime.build_coding_decider', return_value=lambda *args: ''):
                     with patch('anvil.services.session_runtime.build_coding_summarizer', return_value=None):
-                        with patch('anvil.services.session_runtime.run_coding_agent') as run_agent:
-                            run_agent.return_value = type(
-                                'Result',
-                                (),
-                                {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
-                            )()
+                        with patch('anvil.services.session_runtime.run_coding_agent_async') as run_agent:
+                            import asyncio as _asyncio
+                            async def _fake_agent(**_kwargs):
+                                return type(
+                                    'Result',
+                                    (),
+                                    {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
+                                )()
+                            run_agent.side_effect = _fake_agent
                             from anvil.llm.usage import TokenUsageTracker
                             from anvil.llm.rate_limit import RateLimitTracker
                             runner = build_interactive_turn_runner(
@@ -205,7 +211,7 @@ class AgentCliTests(unittest.TestCase):
                                 usage_tracker=TokenUsageTracker(),
                                 rate_limit_tracker=RateLimitTracker(),
                             )
-                            output = runner('create file')
+                            output = _asyncio.run(runner('create file'))
 
         self.assertEqual(output, 'done')
         self.assertEqual(captured['trusted'], True)

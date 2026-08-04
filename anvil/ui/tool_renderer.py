@@ -4,12 +4,27 @@ import sys
 from typing import Any, Dict
 
 from .chrome import (
-    DIM, GREEN, RED, RESET,
+    DIM, GREEN, RED,
     CHECK_MARK, CROSS_MARK,
-    bounded_width, box_lines, colorize, truncate,
+    colorize, truncate,
 )
 
-__all__ = ['render_tool_call', 'print_tool_call']
+__all__ = ['render_tool_call', 'print_tool_call', 'set_line_writer']
+
+# When prompt_toolkit owns the terminal, raw ANSI written straight to sys.stdout
+# is literalised by its output layer (you see "?[2K" instead of a clear-line).
+# The interactive runtime installs an ANSI-aware writer here so tool-call boxes
+# print correctly above the prompt.
+_line_writer: Any = None
+
+
+def set_line_writer(writer: Any) -> None:
+    """Install (or clear, with None) an ANSI-aware single-line writer."""
+    global _line_writer
+    _line_writer = writer
+
+# ⎿  U+23BF — matches Claude Code's tool-call marker
+_RESULT_MARKER = '⎿'
 
 _TOOL_LABELS: Dict[str, str] = {
     'read_file': '[r]',
@@ -55,26 +70,24 @@ def render_tool_call(
     width: int = 80,
     color: bool = True,
 ) -> list[str]:
-    label = _TOOL_LABELS.get(tool_name, '[?]')
-    title = f'{label} {tool_name}'
+    label = colorize(_TOOL_LABELS.get(tool_name, '[?]'), DIM, enabled=color)
     summary = _summarize_args(tool_name, args)
 
+    # Line 1 — "  ⎿ [r] read_file  README.md"
+    header = f'  {_RESULT_MARKER} {label} {tool_name}'
+    if summary:
+        header += f'  {summary}'
+
+    # Line 2 — "    ✓ 0.00s  4KB"
     if result.ok:
         size = len(result.output or '')
         size_str = f'{size}B' if size < 1024 else f'{size // 1024}KB'
-        status = f'{CHECK_MARK} {elapsed_s:.2f}s  {size_str}'
-        status_colored = colorize(status, GREEN, enabled=color)
+        status = colorize(f'{CHECK_MARK} {elapsed_s:.2f}s  {size_str}', GREEN, enabled=color)
     else:
-        err = truncate((result.error or 'failed'), 48)
-        status = f'{CROSS_MARK} {elapsed_s:.2f}s  {err}'
-        status_colored = colorize(status, RED, enabled=color)
+        err = truncate(result.error or 'failed', 48)
+        status = colorize(f'{CROSS_MARK} {elapsed_s:.2f}s  {err}', RED, enabled=color)
 
-    content_lines: list[str] = []
-    if summary:
-        content_lines.append(colorize(summary, DIM, enabled=color))
-    content_lines.append(status_colored)
-
-    return box_lines(content_lines, width=width, title=title)
+    return [header, f'    {status}']
 
 
 def print_tool_call(
@@ -87,11 +100,23 @@ def print_tool_call(
     color: bool = True,
 ) -> None:
     rendered = render_tool_call(tool_name, args, result, elapsed_s, width=width, color=color)
+    if _line_writer is not None:
+        # prompt_toolkit owns the terminal: it repaints the prompt itself, so no
+        # clear-line escape is needed (and raw escapes would be literalised).
+        for line in rendered:
+            _line_writer(line)
+        return
     out = sys.stdout
     enc = getattr(out, 'encoding', None) or 'utf-8'
-    for line in rendered:
+    for i, line in enumerate(rendered):
+        # Clear the spinner line before the first write so the box doesn't
+        # appear on the same line as "Working..."
+        # The prompt_toolkit path passes ``color=False`` because its output
+        # layer owns terminal repainting. Do not leak the clear-line escape
+        # sequence in that mode either.
+        prefix = '\r\033[2K' if i == 0 and color else ''
         try:
-            out.write(line + '\n')
+            out.write(prefix + line + '\n')
         except UnicodeEncodeError:
-            out.write(line.encode(enc, errors='replace').decode(enc) + '\n')
+            out.write((prefix + line).encode(enc, errors='replace').decode(enc) + '\n')
     out.flush()

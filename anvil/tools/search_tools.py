@@ -15,6 +15,13 @@ MAX_FETCH_URL_CHARS = 5000
 MAX_SEARCH_SNIPPET_CHARS = 200
 _USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+
+def _normalize_search_path(value: str) -> str:
+    normalized = value.replace('\\', '/')
+    if normalized.startswith('./'):
+        normalized = normalized[2:]
+    return normalized
+
 __all__ = ['search_tool', 'web_search_tool', 'fetch_url_tool', 'search_tool_specs']
 MAX_WEB_RESULT_TITLE_CHARS = 120
 
@@ -36,8 +43,8 @@ def _try_ripgrep(pattern: str, workspace_root: str) -> List[str] | None:
         )
         if result.returncode == 0 and result.stdout.strip():
             return sorted(
-                f[2:] if f.startswith('./') else f
-                for f in result.stdout.strip().split('\n')
+                _normalize_search_path(f)
+                for f in result.stdout.strip().splitlines()
             )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -58,8 +65,8 @@ def _try_grep(pattern: str, workspace_root: str) -> List[str] | None:
         )
         if result.returncode == 0 and result.stdout.strip():
             return sorted(
-                f[2:] if f.startswith('./') else f
-                for f in result.stdout.strip().split('\n')
+                _normalize_search_path(f)
+                for f in result.stdout.strip().splitlines()
             )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass

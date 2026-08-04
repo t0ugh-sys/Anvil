@@ -11,6 +11,7 @@ dist/
 *.egg-info/
 .venv/
 runs/
+.anvil/
 AGENTS.md
 
 # Environment files

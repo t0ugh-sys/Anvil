@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import shutil
 import time
@@ -329,6 +330,90 @@ class ChatRuntimeTests(unittest.TestCase):
             self.assertIn('\033[?25h', output)
             self.assertIn('\033[2K', output)
             self.assertIn('Working...', output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_render_plain_working_status_when_prompt_toolkit_is_active(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'chat-runtime-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_store = SessionStore.create(
+                root_dir=tmp_dir / 'sessions',
+                workspace_root=tmp_dir,
+                goal='',
+                memory_run_dir=tmp_dir / 'runs',
+                session_id='sess-prompt-toolkit',
+            )
+            stdout = TtyStringIO()
+            runtime = InteractiveRuntime(
+                session_store=session_store,
+                tool_specs=builtin_tool_specs(),
+                run_turn=lambda text: f'done: {text}',
+                stdin=io.StringIO(''),
+                stdout=stdout,
+                model='mock-v3',
+                permission_mode='balanced',
+            )
+            runtime._prompt_session = object()
+
+            runtime._write_welcome(88)
+            result = runtime._run_with_working_status(lambda: 'done')
+
+            output = stdout.getvalue()
+            self.assertEqual(result, 'done')
+            self.assertNotIn('\033[', output)
+            self.assertIn('Working...', output)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_should_queue_input_while_agent_is_working(self) -> None:
+        tmp_dir = Path('tests/.tmp') / f'chat-runtime-{uuid.uuid4().hex}'
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            session_store = SessionStore.create(
+                root_dir=tmp_dir / 'sessions',
+                workspace_root=tmp_dir,
+                goal='',
+                memory_run_dir=tmp_dir / 'runs',
+                session_id='sess-queued-input',
+            )
+            stdout = TtyStringIO()
+            calls: list[str] = []
+
+            async def run_turn(text: str) -> str:
+                calls.append(text)
+                await asyncio.sleep(0.05)
+                return f'done: {text}'
+
+            runtime = InteractiveRuntime(
+                session_store=session_store,
+                tool_specs=builtin_tool_specs(),
+                run_turn=run_turn,
+                stdin=io.StringIO(''),
+                stdout=stdout,
+                model='mock-v3',
+                permission_mode='balanced',
+            )
+            runtime._prompt_session = object()
+            read_count = 0
+
+            async def fake_read_input() -> str:
+                nonlocal read_count
+                read_count += 1
+                if read_count == 1:
+                    await asyncio.sleep(0.01)
+                    return 'second message'
+                await asyncio.Future()
+                return ''
+
+            runtime._read_input_line_async = fake_read_input  # type: ignore[method-assign]
+
+            queued = asyncio.run(runtime._handle_message_with_input_async('first message'))
+
+            self.assertEqual(calls, ['first message'])
+            self.assertEqual(queued, ['second message'])
+            self.assertIn('Working...', stdout.getvalue())
+            self.assertTrue(stdout.getvalue().startswith('\r  '))
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

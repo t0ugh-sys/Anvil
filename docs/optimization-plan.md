@@ -167,8 +167,8 @@ if sys.platform == "win32":
 **渐进式方案**（不做全量重写）：
 
 1. **阶段一** ✅：`anvil/llm/_http.py` 新增 `_http_post_json_async()`（`asyncio.to_thread` 包裹同步 urllib，零新依赖）；`anvil/llm/anthropic/client.py` 新增 `anthropic_async_invoke_factory()` / `_anthropic_async_invoke_factory()`，对外暴露 `async def invoke(prompt: str) -> str`（`AsyncInvokeFn` 类型见 `_types.py`），内含独立的异步重试/退避逻辑；同步接口 `anthropic_invoke_factory()` 保持不变、未受影响。测试见 `tests/test_anthropic_async.py`。
-2. **阶段二**（待办）：`tool_use_loop.py` 改为 `async` 循环，工具并行执行改用 `asyncio.gather()`，废弃 `ThreadPoolExecutor`。
-3. **阶段三**（待办）：`team_runtime.py` / `mailbox.py` 改为原生 async，消除锁竞争。
+2. **阶段二** ✅：`anvil/agent/loop.py` 新增 `_dispatch_tool_calls_async()`（`asyncio.gather()` + `asyncio.to_thread()` 替代 `ThreadPoolExecutor`），以及 `execute_tool_use_round_async` / `make_tool_use_step_async`；`anvil/coding_agent.py` 新增 `run_coding_agent_async()`；`session_runtime.py` 通过 `asyncio.run()` 接入。同步路径完全保留。测试 562/562 通过。
+3. **阶段三** ✅：`anvil/runtime/team.py` 新增 `spawn_teammate_async`（`asyncio.create_task` 替代 `threading.Thread`）、`_run_teammate_loop_async`（`asyncio.sleep` + `await run_coding_agent_async`）、`shutdown_all_async`、`dispatch_ready_tasks_async`（`asyncio.Lock`）；同步 API 完全保留。测试见 `tests/test_team_runtime_async.py`（5 个），567/567 通过。
 
 **风险**：Python 3.10 async 兼容性需验证，特别是 Windows 上的 `asyncio` 事件循环策略。阶段一使用 `asyncio.to_thread`，在 Windows `ProactorEventLoop` 下行为等同线程池，风险较低。
 
@@ -594,7 +594,7 @@ def render_tool_call(tool_name: str, args: dict, result, elapsed_s: float, *, co
 
 ## 6. P4 — 长期架构演进
 
-### 6.1 Plugin 系统
+### 6.1 Plugin 系统 ✅ 已实现
 
 将 `skills/` 中的技能合约演进为正式插件系统：
 
@@ -611,22 +611,31 @@ class SkillBase(Protocol):
     def on_activate(self, ctx: SessionContext) -> None: ...
 ```
 
----
-
-### 6.2 协议层 (`protocols/`) 标准化
-
-当前 `protocols/` 目录内容未记录。建议：
-- 梳理现有内容，若是 Agent-to-Agent 通信协议，基于 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 标准对齐
-- 发布 `anvil-protocol` 规范文档，供第三方 Agent 接入
+`discover_plugins()` 使用 `importlib.metadata.entry_points(group='anvil.skills')` 发现已安装的第三方技能，`SkillLoader._load_external()` 优先尝试 entry points，再 fallback 到 `anvil_skills.*` 命名空间包。16 个测试见 `tests/test_plugin_system.py`。commit `220671a`。
 
 ---
 
-### 6.3 可观测性平台集成
+### 6.2 协议层 (`protocols/`) 标准化 ✅ 已实现
 
-为生产部署场景提供：
-- OpenTelemetry 埋点（traces for tool calls, spans for LLM invocations）
-- Prometheus metrics endpoint（`/metrics`）
-- 结构化 JSON 日志（替代当前混合 `print` + `logging`）
+`anvil/protocols/mcp.py` 实现 MCP (Model Context Protocol) 兼容层：
+
+- 内容类型：`MCPTextContent`、`MCPImageContent`
+- 工具描述：`MCPTool`（含 JSON Schema `inputSchema`）、`MCPInputSchema`
+- 调用/结果：`MCPToolCallParams`、`MCPCallToolResult`
+- 双向转换：`anvil_tool_def_to_mcp`、`mcp_result_from_anvil`、`parse_mcp_tool_call`、`tool_list_to_mcp`
+
+第三方 MCP 客户端可直接列举并调用 Anvil 工具，无需了解内部格式。29 个测试见 `tests/test_mcp_protocol.py`。commit `3651f90`。
+
+---
+
+### 6.3 可观测性平台集成 ✅ 已实现
+
+`anvil/observability/` 模块提供：
+
+- **tracing.py**：零硬依赖 OTel 包装器，OTel 未安装时自动降级为 `NoOpTracer`；`@trace_tool_call` / `@trace_llm_invoke` 装饰器支持同步和异步函数，记录 `tool.name`、`tool.ok`、`elapsed_ms` 等 span 属性
+- **logging.py**：纯 stdlib 结构化日志，`JSONFormatter` 输出 NDJSON，`StructuredLogger` 支持关键字参数字段，`configure_json_logging()` 幂等安装
+
+33 个测试见 `tests/test_observability.py`。commit `faf026d`。
 
 ---
 
@@ -638,7 +647,25 @@ class SkillBase(Protocol):
 
 ---
 
-### 6.5 语义记忆（Memory 模块升级）
+### 6.6 Bug Fix：CLI mock 模式回复 "done" ✅ 已修复
+
+**现象**：`anvil` CLI（mock provider）对对话类问题（如 "你是谁"）回复 `done` 而非有效答案。
+
+**根因**：
+1. `anvil/llm/mock.py`：coding 模式第2次调用固定返回 `final: 'done'`
+2. `anvil/services/session_runtime.py`：`_run_plain_chat_fallback` 对 mock provider 直接返回 `''`，fallback 完全禁用
+3. `_should_use_plain_chat_fallback` 不识别 `'done'` 为需要 fallback 的平凡回复
+
+**修复**：
+- `_should_use_plain_chat_fallback` 新增 `_TRIVIAL_OUTPUTS` 集合检测（`'done'`、`'ok'` 等短词）
+- `_run_plain_chat_fallback` mock 路径返回 `[{model}] I am Anvil, running in mock mode.`
+- `mock.py` coding 模式 `final` 改为 `[mock:{model}] Task complete.`（避免裸 `'done'`）
+
+commit `9a39b8b`。
+
+---
+
+### 6.5 语义记忆（Memory 模块升级）✅ 已实现
 
 **现状**：`memory/` 使用 JSONL 平铺存储，检索依赖全量扫描 + 关键词匹配，对长期积累的上下文利用率低。
 
@@ -665,6 +692,8 @@ class VectorMemoryStore:
 - **项目记忆**：与 git repo 绑定，`.anvil/memory/` 可提交到版本控制共享给团队
 
 **预期收益**：跨会话的知识复用，减少重复解释项目背景，长期任务续接更顺畅。
+
+`anvil/memory/vector_store.py` 实现零外部依赖的语义检索：纯 Python 余弦相似度 KNN，embedding 走 Anthropic API 或本地占位 hash，落盘 `.anvil/memory/vectors.db`（SQLite）。commit `97d04f3`。
 
 ---
 
