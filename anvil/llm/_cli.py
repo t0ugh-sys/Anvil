@@ -92,12 +92,14 @@ def build_invoke_from_args(
 
     if provider == 'anthropic':
         api_key = _resolve_api_key(args, 'ANTHROPIC_API_KEY')
+        extra_headers = parse_provider_headers(getattr(args, 'provider_header', []))
         return _anthropic_invoke_factory(
             api_key=api_key, model=model, base_url=common['base_url'],
             temperature=common['temperature'], timeout_s=common['timeout_s'],
             max_retries=common['max_retries'], retry_backoff_s=common['retry_backoff_s'],
             retry_http_codes=common['retry_http_codes'], debug=common['debug'],
             enable_native_tools=(mode == 'coding'),
+            extra_headers=extra_headers or None,
             usage_tracker=usage_tracker,
             rate_limit_tracker=rate_limit_tracker,
         )

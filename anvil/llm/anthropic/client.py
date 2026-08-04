@@ -36,13 +36,17 @@ def _anthropic_invoke_factory(
     stop_sequences: List[str] | None = None,
     thinking_budget_tokens: int = 0,
     enable_prompt_caching: bool = True,
+    extra_headers: Dict[str, str] | None = None,
 ) -> InvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
         'x-api-key': api_key,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
+        'user-agent': 'anthropic-sdk-python/0.1',
     }
+    if extra_headers:
+        headers.update(extra_headers)
 
     def _build_max_tokens() -> int:
         """Calculate max_tokens respecting thinking budget constraints.
@@ -151,7 +155,7 @@ def _anthropic_invoke_factory(
             return _extract_anthropic_text(response)
         except ProviderError:
             raise
-        except (KeyError, IndexError, TypeError) as exc:
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             detail = str(exc).strip()
             message = 'invalid Anthropic response format'
             if detail:
@@ -203,13 +207,17 @@ def _anthropic_async_invoke_factory(
     stop_sequences: List[str] | None = None,
     thinking_budget_tokens: int = 0,
     enable_prompt_caching: bool = True,
+    extra_headers: Dict[str, str] | None = None,
 ) -> AsyncInvokeFn:
     endpoint = (base_url.rstrip('/') + '/messages') if base_url else 'https://api.anthropic.com/v1/messages'
     headers = {
         'x-api-key': api_key,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
+        'user-agent': 'anthropic-sdk-python/0.1',
     }
+    if extra_headers:
+        headers.update(extra_headers)
 
     def _build_payload(prompt: str) -> dict:
         max_tokens = (

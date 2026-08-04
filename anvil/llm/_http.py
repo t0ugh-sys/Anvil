@@ -77,6 +77,8 @@ def _http_post_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             raw = response.read().decode('utf-8')
+            if not raw.strip():
+                raise ProviderHttpError(status_code=200, body='empty response body')
             parsed = json.loads(raw)
             if return_headers:
                 response_headers = dict(response.headers)

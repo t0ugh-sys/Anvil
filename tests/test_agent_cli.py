@@ -194,12 +194,15 @@ class AgentCliTests(unittest.TestCase):
             with patch('anvil.services.session_runtime.load_skills_from_args', return_value=None):
                 with patch('anvil.services.session_runtime.build_coding_decider', return_value=lambda *args: ''):
                     with patch('anvil.services.session_runtime.build_coding_summarizer', return_value=None):
-                        with patch('anvil.services.session_runtime.run_coding_agent') as run_agent:
-                            run_agent.return_value = type(
-                                'Result',
-                                (),
-                                {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
-                            )()
+                        with patch('anvil.services.session_runtime.run_coding_agent_async') as run_agent:
+                            import asyncio as _asyncio
+                            async def _fake_agent(**_kwargs):
+                                return type(
+                                    'Result',
+                                    (),
+                                    {'done': True, 'stop_reason': type('Stop', (), {'value': 'done'})(), 'steps': 1},
+                                )()
+                            run_agent.side_effect = _fake_agent
                             from anvil.llm.usage import TokenUsageTracker
                             from anvil.llm.rate_limit import RateLimitTracker
                             runner = build_interactive_turn_runner(
@@ -208,7 +211,7 @@ class AgentCliTests(unittest.TestCase):
                                 usage_tracker=TokenUsageTracker(),
                                 rate_limit_tracker=RateLimitTracker(),
                             )
-                            output = runner('create file')
+                            output = _asyncio.run(runner('create file'))
 
         self.assertEqual(output, 'done')
         self.assertEqual(captured['trusted'], True)

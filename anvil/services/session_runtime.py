@@ -10,6 +10,7 @@ from typing import List
 from ..coding_agent import run_coding_agent, run_coding_agent_async
 from ..config.layered import build_layered_config
 from ..core.types import StopConfig
+from ..infra.permissions import get_ask_permission_fn, set_ask_permission_fn
 from ..llm.providers import build_invoke_from_args
 from ..llm.usage import TokenUsageTracker
 from ..llm.rate_limit import RateLimitTracker
@@ -169,7 +170,7 @@ def build_interactive_turn_runner(
     usage_tracker: TokenUsageTracker,
     rate_limit_tracker: RateLimitTracker,
 ):
-    def run_turn(user_text: str) -> str:
+    async def run_turn(user_text: str) -> str:
         turn_args = copy.deepcopy(base_args)
         turn_args.interactive_trusted_workspace = True
         turn_args.session_id = session_id
@@ -183,8 +184,10 @@ def build_interactive_turn_runner(
         summarizer = build_coding_summarizer(turn_args)
         if runtime.observer is not None:
             runtime.observer('run_started', {'goal': runtime.goal, 'strategy': 'coding', 'facts': []})
-        import os
-        use_color = os.isatty(1)
+        # Tool results are emitted through the prompt_toolkit stdout proxy
+        # during an interactive TTY session. That proxy is configured for raw
+        # terminal sequences, so preserve the Claude-style muted colors there.
+        use_color = bool(getattr(sys.stdout, 'isatty', lambda: False)())
         import shutil
         term_width = shutil.get_terminal_size((80, 24)).columns
         from ..ui.chrome import bounded_width
@@ -195,21 +198,39 @@ def build_interactive_turn_runner(
             def on_tool_result(tool_name, args, result, elapsed_s):
                 print_tool_call(tool_name, args, result, elapsed_s, width=render_width, color=use_color)
 
-        result = asyncio.run(run_coding_agent_async(
-            goal=runtime.goal,
-            decider=decider,
-            workspace_root=runtime.workspace_root,
-            stop=StopConfig(max_steps=turn_args.max_steps, max_elapsed_s=turn_args.timeout_s),
-            observer=runtime.observer,
-            context_provider=runtime.build_context_provider(),
-            skills=skills,
-            policy=runtime.build_policy(),
-            task_store=runtime.task_store,
-            compression_config=runtime.compression_config,
-            transcripts_dir=runtime.transcripts_dir,
-            summarizer=summarizer,
-            on_tool_result=on_tool_result,
-        ))
+        # Run the agent in a thread pool with its own event loop so that
+        # blocking tool calls (subprocess, file I/O) do NOT block the main
+        # event loop. This keeps prompt_toolkit's prompt_async responsive
+        # so the user can type while the agent is working.
+        loop = asyncio.get_event_loop()
+        ask_permission_fn = get_ask_permission_fn()
+
+        def _run_agent_in_thread() -> object:
+            import asyncio as _asyncio
+            # The callback is stored in thread-local state. Explicitly install
+            # the current interactive callback in the worker that executes
+            # tools, then clear it when the turn is complete.
+            set_ask_permission_fn(ask_permission_fn)
+            try:
+                return _asyncio.run(run_coding_agent_async(
+                    goal=runtime.goal,
+                    decider=decider,
+                    workspace_root=runtime.workspace_root,
+                    stop=StopConfig(max_steps=turn_args.max_steps, max_elapsed_s=turn_args.timeout_s),
+                    observer=runtime.observer,
+                    context_provider=runtime.build_context_provider(),
+                    skills=skills,
+                    policy=runtime.build_policy(),
+                    task_store=runtime.task_store,
+                    compression_config=runtime.compression_config,
+                    transcripts_dir=runtime.transcripts_dir,
+                    summarizer=summarizer,
+                    on_tool_result=on_tool_result,
+                ))
+            finally:
+                set_ask_permission_fn(None)
+
+        result = await loop.run_in_executor(None, _run_agent_in_thread)
         payload = runtime.finalize(result)
         output = _extract_interactive_output(payload)
         if _should_use_plain_chat_fallback(output):

@@ -9,7 +9,19 @@ from .chrome import (
     colorize, truncate,
 )
 
-__all__ = ['render_tool_call', 'print_tool_call']
+__all__ = ['render_tool_call', 'print_tool_call', 'set_line_writer']
+
+# When prompt_toolkit owns the terminal, raw ANSI written straight to sys.stdout
+# is literalised by its output layer (you see "?[2K" instead of a clear-line).
+# The interactive runtime installs an ANSI-aware writer here so tool-call boxes
+# print correctly above the prompt.
+_line_writer: Any = None
+
+
+def set_line_writer(writer: Any) -> None:
+    """Install (or clear, with None) an ANSI-aware single-line writer."""
+    global _line_writer
+    _line_writer = writer
 
 # ⎿  U+23BF — matches Claude Code's tool-call marker
 _RESULT_MARKER = '⎿'
@@ -88,12 +100,21 @@ def print_tool_call(
     color: bool = True,
 ) -> None:
     rendered = render_tool_call(tool_name, args, result, elapsed_s, width=width, color=color)
+    if _line_writer is not None:
+        # prompt_toolkit owns the terminal: it repaints the prompt itself, so no
+        # clear-line escape is needed (and raw escapes would be literalised).
+        for line in rendered:
+            _line_writer(line)
+        return
     out = sys.stdout
     enc = getattr(out, 'encoding', None) or 'utf-8'
     for i, line in enumerate(rendered):
         # Clear the spinner line before the first write so the box doesn't
         # appear on the same line as "Working..."
-        prefix = '\r\033[2K' if i == 0 else ''
+        # The prompt_toolkit path passes ``color=False`` because its output
+        # layer owns terminal repainting. Do not leak the clear-line escape
+        # sequence in that mode either.
+        prefix = '\r\033[2K' if i == 0 and color else ''
         try:
             out.write(prefix + line + '\n')
         except UnicodeEncodeError:

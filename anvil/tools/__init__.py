@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from ..agent.protocol import ToolResult
-from ..infra.permissions import PermissionMode
+from ..infra.permissions import PermissionMode, get_ask_permission_fn
 from ..infra.policies import TOOL_CAPABILITIES
 from ..tool_spec import ToolRisk, ToolSpec
 from .base import (
@@ -248,19 +248,35 @@ def execute_tool_call(context: ToolContext, tool_call, tools: ToolDispatchMap) -
             capabilities=capabilities,
         )
         decision = permission_manager.decide(request)
-        if decision.mode != PermissionMode.allow:
-            permission_manager.record_decision(decision.cache_key, decision.mode)
+        if decision.mode == PermissionMode.deny:
+            permission_manager.record_decision(decision.cache_key, PermissionMode.deny)
             return ToolResult(
                 id=tool_call.id,
                 ok=False,
                 output='',
                 error=f'tool blocked by permission: {tool_call.name} ({decision.reason})',
                 metadata={
-                    'permission_decision': decision.mode,
+                    'permission_decision': PermissionMode.deny,
                     'permission_reason': decision.reason,
                     'permission_cached': decision.cached,
                 },
             )
+        if decision.mode == PermissionMode.ask:
+            ask_fn = get_ask_permission_fn()
+            if ask_fn is None or not ask_fn(tool_call.name, dict(tool_call.arguments)):
+                permission_manager.record_decision(decision.cache_key, PermissionMode.deny)
+                return ToolResult(
+                    id=tool_call.id,
+                    ok=False,
+                    output='',
+                    error=f'tool blocked by permission: {tool_call.name} ({decision.reason})',
+                    metadata={
+                        'permission_decision': PermissionMode.deny,
+                        'permission_reason': decision.reason,
+                        'permission_cached': decision.cached,
+                    },
+                )
+            permission_manager.record_decision(decision.cache_key, PermissionMode.allow)
     args = dict(tool_call.arguments)
     args.setdefault('id', tool_call.id)
     result = tool(context, args)

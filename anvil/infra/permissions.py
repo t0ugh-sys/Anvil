@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Mapping, Sequence, Tuple
 
 from .policies import Capability
 
@@ -15,7 +16,19 @@ __all__ = [
     'PermissionRequest',
     'PermissionDecision',
     'merge_rule_sets',
+    'set_ask_permission_fn',
+    'get_ask_permission_fn',
 ]
+
+_tls = threading.local()
+
+
+def set_ask_permission_fn(fn: Callable[[str, dict], bool] | None) -> None:
+    _tls.ask_fn = fn
+
+
+def get_ask_permission_fn() -> Callable[[str, dict], bool] | None:
+    return getattr(_tls, 'ask_fn', None)
 
 
 class PermissionMode(str):
